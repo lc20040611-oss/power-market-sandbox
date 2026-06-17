@@ -1,0 +1,317 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+import { scenarioPresets } from "@/data/scenario-presets";
+import { AwardChart, BidCurveChart, ProfitChart } from "@/components/charts/chart-shell";
+import { runMarketClearing } from "@/lib/market-clearing";
+import { defaultRuleConfig, STORAGE_KEYS } from "@/lib/rule-config";
+import { readStorage, writeStorage } from "@/lib/storage-utils";
+import type {
+  MarketParticipant,
+  ParticipantType,
+  RuleConfig,
+  SimulationInput,
+  ClearingResult
+} from "@/lib/types";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+
+const defaultScenario = scenarioPresets[0].input;
+const participantTypes: ParticipantType[] = ["火电", "新能源", "储能"];
+
+export function SimulationWorkbench() {
+  const [form, setForm] = useState<SimulationInput>(defaultScenario);
+  const [ruleConfig, setRuleConfig] = useState<RuleConfig>(defaultRuleConfig);
+  const [result, setResult] = useState<ClearingResult>(() =>
+    runMarketClearing(defaultScenario, defaultRuleConfig)
+  );
+
+  useEffect(() => {
+    setForm(readStorage<SimulationInput>(STORAGE_KEYS.marketInput, defaultScenario));
+    setRuleConfig(readStorage<RuleConfig>(STORAGE_KEYS.ruleConfig, defaultRuleConfig));
+  }, []);
+
+  useEffect(() => {
+    writeStorage(STORAGE_KEYS.marketResult, result);
+  }, [result]);
+
+  const updateLoadDemand = (value: string) => {
+    setForm((current) => ({
+      ...current,
+      loadDemand: Number(value)
+    }));
+  };
+
+  const updateParticipant = (
+    index: number,
+    field: keyof Pick<
+      MarketParticipant,
+      "name" | "type" | "price" | "marginalCost" | "declaredQuantity" | "contractQuantity" | "contractPrice" | "actualQuantity"
+    >,
+    value: string
+  ) => {
+    setForm((current) => ({
+      ...current,
+      participants: current.participants.map((participant, participantIndex) =>
+        participantIndex === index
+          ? {
+              ...participant,
+              [field]:
+                field === "name" || field === "type"
+                  ? value
+                  : Number(value)
+            }
+          : participant
+      )
+    }));
+  };
+
+  const handleRun = () => {
+    writeStorage(STORAGE_KEYS.marketInput, form);
+    writeStorage(STORAGE_KEYS.ruleConfig, ruleConfig);
+    setResult(runMarketClearing(form, ruleConfig));
+  };
+
+  const loadScenario = (index: number) => {
+    const selected = scenarioPresets[index].input;
+    setForm(selected);
+    setResult(runMarketClearing(selected, ruleConfig));
+  };
+
+  return (
+    <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+      <Card>
+        <CardHeader>
+          <CardTitle>市场仿真输入</CardTitle>
+          <CardDescription>保持现有页面结构，仿真时会自动应用当前规则配置。</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="flex flex-wrap gap-3">
+            {scenarioPresets.map((preset, index) => (
+              <Button key={preset.scenario} variant="outline" size="sm" onClick={() => loadScenario(index)}>
+                {preset.scenario}
+              </Button>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-4 text-sm text-cyan-100">
+            <Badge>当前规则</Badge>
+            <span>
+              {ruleConfig.clearingMechanism === "uniformPrice" ? "统一出清价" : "按报价支付"}
+            </span>
+            <span>价格区间 {ruleConfig.priceFloor} - {ruleConfig.priceCap}</span>
+            <span>新能源优先 {ruleConfig.renewablePriority ? "开启" : "关闭"}</span>
+            <span>容量补偿 {ruleConfig.enableCapacityPayment ? "开启" : "关闭"}</span>
+          </div>
+
+          <NumberField label="负荷需求 (MWh)" value={form.loadDemand} onChange={updateLoadDemand} />
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold">可编辑输入表格</h3>
+              <Badge variant="secondary">规则研究沙盒输入</Badge>
+            </div>
+            <div className="overflow-x-auto rounded-2xl border border-white/10 bg-slate-950/40">
+              <table className="min-w-full text-sm">
+                <thead className="bg-white/5 text-left text-slate-300">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">主体名称</th>
+                    <th className="px-4 py-3 font-medium">类型</th>
+                    <th className="px-4 py-3 font-medium">报价</th>
+                    <th className="px-4 py-3 font-medium">边际成本</th>
+                    <th className="px-4 py-3 font-medium">申报电量</th>
+                    <th className="px-4 py-3 font-medium">合约电量</th>
+                    <th className="px-4 py-3 font-medium">合约价格</th>
+                    <th className="px-4 py-3 font-medium">实际执行电量</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {form.participants.map((participant, index) => (
+                    <tr key={participant.id} className="border-t border-white/10">
+                      <td className="px-4 py-3">
+                        <Input
+                          value={participant.name}
+                          onChange={(event) => updateParticipant(index, "name", event.target.value)}
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <select
+                          className="flex h-10 w-full rounded-md border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                          value={participant.type}
+                          onChange={(event) => updateParticipant(index, "type", event.target.value)}
+                        >
+                          {participantTypes.map((type) => (
+                            <option key={type} value={type} className="bg-slate-950">
+                              {type}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-4 py-3">
+                        <Input
+                          type="number"
+                          value={participant.price}
+                          onChange={(event) => updateParticipant(index, "price", event.target.value)}
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <Input
+                          type="number"
+                          value={participant.marginalCost}
+                          onChange={(event) => updateParticipant(index, "marginalCost", event.target.value)}
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <Input
+                          type="number"
+                          value={participant.declaredQuantity}
+                          onChange={(event) => updateParticipant(index, "declaredQuantity", event.target.value)}
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <Input
+                          type="number"
+                          value={participant.contractQuantity ?? 0}
+                          onChange={(event) => updateParticipant(index, "contractQuantity", event.target.value)}
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <Input
+                          type="number"
+                          value={participant.contractPrice ?? 0}
+                          onChange={(event) => updateParticipant(index, "contractPrice", event.target.value)}
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <Input
+                          type="number"
+                          value={participant.actualQuantity ?? participant.declaredQuantity}
+                          onChange={(event) => updateParticipant(index, "actualQuantity", event.target.value)}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <Button size="lg" onClick={handleRun}>
+            运行仿真
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>系统指标</CardTitle>
+          <CardDescription>点击运行后自动更新结果与图表。</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Metric label="出清电价" value={`${result.clearingPrice} 元/MWh`} />
+          <Metric label="总成交电量" value={`${result.totalClearedQuantity} MWh`} />
+          <Metric label="用户购电成本" value={`${result.customerPurchaseCost} 元`} />
+          <Metric label="发电侧总收益" value={`${result.totalGeneratorRevenue} 元`} />
+          <Metric label="系统总成本" value={`${result.totalSystemCost} 元`} />
+          <Metric label="社会福利" value={`${result.socialWelfare} 元`} />
+          <Metric label="新能源中标电量" value={`${result.renewableAwardedQuantity} MWh`} />
+          <Metric label="新能源消纳率" value={`${(result.renewableConsumptionRate * 100).toFixed(2)}%`} />
+          <Metric label="弃风弃光电量" value={`${result.renewableCurtailmentQuantity} MWh`} />
+          <Metric label="容量补偿总额" value={`${result.capacityPaymentTotal} 元`} />
+          <Metric label="偏差惩罚总额" value={`${result.deviationPenaltyTotal} 元`} />
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-6 xl:col-span-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>主体结果表</CardTitle>
+            <CardDescription>展示结算价、申报电量、中标电量、补贴、惩罚与利润。</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto rounded-2xl border border-white/10 bg-slate-950/40">
+              <table className="min-w-full text-sm">
+                <thead className="bg-white/5 text-left text-slate-300">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">主体</th>
+                    <th className="px-4 py-3 font-medium">类型</th>
+                    <th className="px-4 py-3 font-medium">结算价</th>
+                    <th className="px-4 py-3 font-medium">报价</th>
+                    <th className="px-4 py-3 font-medium">边际成本</th>
+                    <th className="px-4 py-3 font-medium">申报电量</th>
+                    <th className="px-4 py-3 font-medium">中标电量</th>
+                    <th className="px-4 py-3 font-medium">合约收益</th>
+                    <th className="px-4 py-3 font-medium">偏差结算</th>
+                    <th className="px-4 py-3 font-medium">收入</th>
+                    <th className="px-4 py-3 font-medium">成本</th>
+                    <th className="px-4 py-3 font-medium">利润</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.participants.map((participant) => (
+                    <tr key={participant.id} className="border-t border-white/10 text-slate-300">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <span>{participant.name}</span>
+                          {participant.isMarginalUnit ? <Badge>边际机组</Badge> : null}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">{participant.type}</td>
+                      <td className="px-4 py-3">{participant.settlementPrice}</td>
+                      <td className="px-4 py-3">{participant.price}</td>
+                      <td className="px-4 py-3">{participant.marginalCost}</td>
+                      <td className="px-4 py-3">{participant.declaredQuantity}</td>
+                      <td className="px-4 py-3">{participant.awardedQuantity}</td>
+                      <td className="px-4 py-3">{participant.contractRevenue}</td>
+                      <td className="px-4 py-3">{participant.spotSettlementAmount}</td>
+                      <td className="px-4 py-3">{participant.revenue}</td>
+                      <td className="px-4 py-3">{participant.totalCost}</td>
+                      <td className="px-4 py-3">{participant.profit}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="grid gap-6 xl:grid-cols-3">
+          <BidCurveChart data={result.participants} />
+          <AwardChart data={result.participants} />
+          <ProfitChart data={result.participants} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NumberField({
+  label,
+  value,
+  onChange,
+  step = "1"
+}: {
+  label: string;
+  value: number;
+  onChange: (value: string) => void;
+  step?: string;
+}) {
+  return (
+    <label className="space-y-2 text-sm text-slate-300">
+      <span>{label}</span>
+      <Input type="number" step={step} value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+      <p className="text-sm text-slate-400">{label}</p>
+      <p className="mt-2 text-2xl font-semibold text-white">{value}</p>
+    </div>
+  );
+}
