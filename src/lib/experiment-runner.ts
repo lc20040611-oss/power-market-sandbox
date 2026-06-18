@@ -1,6 +1,6 @@
 import { computeMarketPowerMetrics } from "./market-power";
 import { runMarketClearing } from "./market-clearing";
-import { runParameterSweep, getDefaultSweepConfigs } from "./parameter-sweep";
+import { countParameterCombinations, getDefaultSweepConfigs, runParameterSweep } from "./parameter-sweep";
 import { computeRenewableMetrics } from "./renewables";
 import { defaultRuleConfig } from "./rule-config";
 import type {
@@ -15,6 +15,7 @@ import type {
 function createChartData(results: ExperimentRunRecord["results"]) {
   return results.map((result) => ({
     parameterValue: String(result.parameterValue),
+    combinationLabel: result.combinationLabel,
     clearingPrice: result.clearingPrice,
     customerPurchaseCost: result.customerPurchaseCost,
     renewableConsumptionRate: result.renewableConsumptionRate,
@@ -24,6 +25,8 @@ function createChartData(results: ExperimentRunRecord["results"]) {
   }));
 }
 
+const defaultSweepConfigs = getDefaultSweepConfigs();
+
 export const experimentTemplates: ExperimentTemplate[] = [
   {
     id: "renewable-penetration",
@@ -31,7 +34,7 @@ export const experimentTemplates: ExperimentTemplate[] = [
     description: "考察新能源占比变化对价格、消纳和福利的影响。",
     config: {
       baseScenario: "基准场景",
-      variableParameters: [getDefaultSweepConfigs()[0]],
+      variableParameters: [defaultSweepConfigs[0]],
       fixedParameters: { clearingMechanism: "uniformPrice" }
     }
   },
@@ -41,7 +44,7 @@ export const experimentTemplates: ExperimentTemplate[] = [
     description: "考察不同合约比例下的现货暴露和收益结构。",
     config: {
       baseScenario: "高中长期合约比例",
-      variableParameters: [getDefaultSweepConfigs()[1]],
+      variableParameters: [defaultSweepConfigs[1]],
       fixedParameters: { contractSettlement: true }
     }
   },
@@ -51,7 +54,7 @@ export const experimentTemplates: ExperimentTemplate[] = [
     description: "考察偏差考核机制对结算和市场行为的影响。",
     config: {
       baseScenario: "高现货暴露风险场景",
-      variableParameters: [getDefaultSweepConfigs()[2]],
+      variableParameters: [defaultSweepConfigs[2]],
       fixedParameters: { enableDeviationPenalty: true }
     }
   },
@@ -61,7 +64,7 @@ export const experimentTemplates: ExperimentTemplate[] = [
     description: "考察容量补偿水平变化对系统收益与可靠性的影响。",
     config: {
       baseScenario: "基准场景",
-      variableParameters: [getDefaultSweepConfigs()[3]],
+      variableParameters: [defaultSweepConfigs[3]],
       fixedParameters: { enableCapacityPayment: true }
     }
   },
@@ -71,7 +74,7 @@ export const experimentTemplates: ExperimentTemplate[] = [
     description: "考察储能容量扩张对价格与新能源消纳的影响。",
     config: {
       baseScenario: "新能源高波动场景",
-      variableParameters: [getDefaultSweepConfigs()[4]],
+      variableParameters: [defaultSweepConfigs[4]],
       fixedParameters: { storageEnabled: true }
     }
   },
@@ -81,8 +84,18 @@ export const experimentTemplates: ExperimentTemplate[] = [
     description: "考察策略报价和容量扣留对价格及市场力风险的影响。",
     config: {
       baseScenario: "高负荷紧张场景",
-      variableParameters: [getDefaultSweepConfigs()[5]],
+      variableParameters: [defaultSweepConfigs[5]],
       fixedParameters: { marketPowerStudy: true }
+    }
+  },
+  {
+    id: "multi-factor-flexibility",
+    name: "新能源-储能-负荷组合实验",
+    description: "同时扫描新能源占比、储能容量和负荷水平，观察价格、消纳和系统成本联动变化。",
+    config: {
+      baseScenario: "新能源高波动场景",
+      variableParameters: [defaultSweepConfigs[0], defaultSweepConfigs[4], defaultSweepConfigs[6]],
+      fixedParameters: { multiFactorStudy: true }
     }
   }
 ];
@@ -106,8 +119,10 @@ export function runExperiment(
   config: ExperimentConfig,
   baseInput: SimulationInput
 ): ExperimentRunRecord {
-  const sweepConfig: ParameterSweepConfig = config.variableParameters[0] ?? getDefaultSweepConfigs()[0];
-  const results = runParameterSweep(baseInput, sweepConfig, defaultRuleConfig);
+  const sweepConfigs: ParameterSweepConfig[] = config.variableParameters.length > 0
+    ? config.variableParameters
+    : [defaultSweepConfigs[0]];
+  const results = runParameterSweep(baseInput, sweepConfigs, defaultRuleConfig);
   const clearingResult = runMarketClearing(baseInput, defaultRuleConfig);
   const marketPower = computeMarketPowerMetrics(baseInput);
   const renewableMetrics = computeRenewableMetrics(clearingResult.participants);
@@ -119,10 +134,15 @@ export function runExperiment(
     runAt: new Date().toISOString(),
     baseScenario: config.baseScenario,
     variableParameters: config.variableParameters,
-    fixedParameters: config.fixedParameters,
+    fixedParameters: {
+      ...config.fixedParameters,
+      combinationCount: countParameterCombinations(sweepConfigs)
+    },
     notes: config.notes,
     results,
     resultSnapshot: {
+      baseInput,
+      appliedRuleConfig: defaultRuleConfig,
       clearingResult,
       marketPower,
       renewableMetrics
@@ -138,7 +158,8 @@ export function summarizeExperimentRecord(record: ExperimentRunRecord): Experime
     researchQuestion: record.researchQuestion,
     runAt: record.runAt,
     baseScenario: record.baseScenario,
-    parameterLabel: record.variableParameters[0]?.label ?? "参数",
-    resultCount: record.results.length
+    parameterLabel: record.variableParameters.map((item) => item.label).join(" + "),
+    resultCount: record.results.length,
+    sourceVersion: record.sourceVersion
   };
 }

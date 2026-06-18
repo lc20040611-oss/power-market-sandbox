@@ -9,7 +9,7 @@
     "jsx": "react-jsx"
   },
   "include": [
-    "tests/**/*.ts",
+    "tests/*.ts",
     "src/lib/**/*.ts"
   ]
 }

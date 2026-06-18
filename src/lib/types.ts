@@ -21,6 +21,33 @@ export type MarketRole = {
 
 export type ParticipantType = "火电" | "新能源" | "储能";
 export type ClearingMechanism = "uniformPrice" | "payAsBid";
+export type SweepParameterKey =
+  | "renewableShare"
+  | "contractRatio"
+  | "deviationPenaltyRate"
+  | "capacityPaymentRate"
+  | "storageCapacity"
+  | "strategyBid"
+  | "loadScale"
+  | "priceCap"
+  | "renewableSubsidy";
+
+export type MarketParticipantPeriodInput = {
+  periodId: string;
+  price?: number;
+  declaredQuantity?: number;
+  actualQuantity?: number;
+  forecastOutput?: number;
+  availableOutput?: number;
+};
+
+export type StorageOptimizationConfig = {
+  enabled: boolean;
+  objective: "arbitrage" | "peakShaving";
+  priceForecast?: number[];
+  targetFinalSoc?: number;
+  socStep?: number;
+};
 
 export type MarketParticipant = {
   id: string;
@@ -44,11 +71,21 @@ export type MarketParticipant = {
   maxSoc?: number;
   availableCapacity?: number;
   capacityAvailabilityRate?: number;
+  periodData?: MarketParticipantPeriodInput[];
+  storageOptimization?: StorageOptimizationConfig;
+};
+
+export type TimePeriodInput = {
+  id: string;
+  label: string;
+  loadDemand: number;
+  priceHint?: number;
 };
 
 export type SimulationInput = {
   loadDemand: number;
   participants: MarketParticipant[];
+  timePeriods?: TimePeriodInput[];
 };
 
 export type RuleConfig = {
@@ -86,6 +123,49 @@ export type ParticipantClearingResult = MarketParticipant & {
   totalCost: number;
   profit: number;
   isMarginalUnit: boolean;
+  storageChargeQuantity?: number;
+  storageDischargeQuantity?: number;
+  storageSocStart?: number;
+  storageSocEnd?: number;
+};
+
+export type PeriodParticipantResult = ParticipantClearingResult & {
+  periodId: string;
+  periodLabel: string;
+};
+
+export type PeriodClearingResult = {
+  periodId: string;
+  periodLabel: string;
+  loadDemand: number;
+  baseLoadDemand: number;
+  storageChargingLoad: number;
+  storageDischargingSupply: number;
+  clearingPrice: number;
+  totalClearedQuantity: number;
+  unmetDemand: number;
+  participants: PeriodParticipantResult[];
+};
+
+export type StorageDispatchStep = {
+  periodId: string;
+  periodLabel: string;
+  chargePower: number;
+  dischargePower: number;
+  socStart: number;
+  socEnd: number;
+  referencePrice: number;
+};
+
+export type StorageDispatchPlan = {
+  participantId: string;
+  participantName: string;
+  steps: StorageDispatchStep[];
+  chargeCost: number;
+  dischargeRevenue: number;
+  netArbitrageRevenue: number;
+  equivalentCycles: number;
+  peakLoadReduction: number;
 };
 
 export type ClearingResult = {
@@ -105,6 +185,9 @@ export type ClearingResult = {
   curtailmentPenaltyTotal: number;
   ruleConfig: RuleConfig;
   participants: ParticipantClearingResult[];
+  periodResults: PeriodClearingResult[];
+  storageDispatchPlans: StorageDispatchPlan[];
+  isMultiPeriod: boolean;
 };
 
 export type MarketClearingResult = ClearingResult;
@@ -230,13 +313,34 @@ export type MarketPowerMetrics = {
   }>;
 };
 
-export type SweepParameterKey =
-  | "renewableShare"
-  | "contractRatio"
-  | "deviationPenaltyRate"
-  | "capacityPaymentRate"
-  | "storageCapacity"
-  | "strategyBid";
+export type ParameterSweepConfig = {
+  parameterKey: SweepParameterKey;
+  label: string;
+  values: Array<number | string>;
+};
+
+export type ParameterCombination = Record<string, number | string>;
+
+export type ParameterSweepResult = {
+  parameterKey: SweepParameterKey;
+  parameterLabel: string;
+  parameterValue: number | string;
+  parameterValues: ParameterCombination;
+  combinationLabel: string;
+  clearingPrice: number;
+  customerPurchaseCost: number;
+  totalGeneratorRevenue: number;
+  totalSystemCost: number;
+  socialWelfare: number;
+  renewableConsumptionRate: number;
+  curtailmentRate: number;
+  storageRevenue: number;
+  capacityPaymentTotal: number;
+  deviationPenaltyTotal: number;
+  hhi: number;
+  rsi: number;
+  marketPowerRiskLevel: "低风险" | "中风险" | "高风险";
+};
 
 export type ExperimentConfig = {
   id: string;
@@ -255,29 +359,12 @@ export type ExperimentTemplate = {
   config: Omit<ExperimentConfig, "id" | "experimentName" | "researchQuestion" | "notes">;
 };
 
-export type ParameterSweepConfig = {
-  parameterKey: SweepParameterKey;
-  label: string;
-  values: Array<number | string>;
-};
-
-export type ParameterSweepResult = {
-  parameterKey: SweepParameterKey;
-  parameterLabel: string;
-  parameterValue: number | string;
-  clearingPrice: number;
-  customerPurchaseCost: number;
-  totalGeneratorRevenue: number;
-  totalSystemCost: number;
-  socialWelfare: number;
-  renewableConsumptionRate: number;
-  curtailmentRate: number;
-  storageRevenue: number;
-  capacityPaymentTotal: number;
-  deviationPenaltyTotal: number;
-  hhi: number;
-  rsi: number;
-  marketPowerRiskLevel: "低风险" | "中风险" | "高风险";
+export type ExperimentRunSnapshot = {
+  baseInput: SimulationInput;
+  appliedRuleConfig: RuleConfig;
+  clearingResult: ClearingResult;
+  marketPower: MarketPowerMetrics;
+  renewableMetrics: RenewableMetrics;
 };
 
 export type ExperimentRunRecord = {
@@ -290,12 +377,10 @@ export type ExperimentRunRecord = {
   fixedParameters: Record<string, string | number | boolean>;
   notes: string;
   results: ParameterSweepResult[];
-  resultSnapshot: {
-    clearingResult: ClearingResult;
-    marketPower: MarketPowerMetrics;
-    renewableMetrics: RenewableMetrics;
-  };
+  resultSnapshot: ExperimentRunSnapshot;
   chartData: Array<Record<string, string | number>>;
+  sourceVersion?: number;
+  recordId?: string;
 };
 
 export type ExperimentRunSummary = {
@@ -306,6 +391,7 @@ export type ExperimentRunSummary = {
   baseScenario: string;
   parameterLabel: string;
   resultCount: number;
+  sourceVersion?: number;
 };
 
 export type ExportData = {
@@ -329,4 +415,30 @@ export type PaperChartConfig = {
 export type ResearchReportDraft = {
   title: string;
   markdown: string;
+};
+
+export type ExperimentRecordSummary = {
+  id: string;
+  experimentName: string;
+  researchQuestion: string;
+  baseScenario: string;
+  latestVersion: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ExperimentVersionRecord = {
+  experimentId: string;
+  version: number;
+  config: ExperimentConfig;
+  createdAt: string;
+};
+
+export type ExperimentRunArchiveRecord = {
+  id: string;
+  experimentId: string;
+  experimentVersion: number;
+  runAt: string;
+  summary: ExperimentRunSummary;
+  record: ExperimentRunRecord;
 };

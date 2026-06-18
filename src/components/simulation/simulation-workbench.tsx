@@ -217,6 +217,7 @@ export function SimulationWorkbench() {
           <Metric label="发电侧总收益" value={`${result.totalGeneratorRevenue} 元`} />
           <Metric label="系统总成本" value={`${result.totalSystemCost} 元`} />
           <Metric label="社会福利" value={`${result.socialWelfare} 元`} />
+          <Metric label="时段数量" value={`${result.periodResults.length} 个`} />
           <Metric label="新能源中标电量" value={`${result.renewableAwardedQuantity} MWh`} />
           <Metric label="新能源消纳率" value={`${(result.renewableConsumptionRate * 100).toFixed(2)}%`} />
           <Metric label="弃风弃光电量" value={`${result.renewableCurtailmentQuantity} MWh`} />
@@ -283,6 +284,94 @@ export function SimulationWorkbench() {
           <AwardChart data={result.participants} />
           <ProfitChart data={result.participants} />
         </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>多时段出清结果</CardTitle>
+            <CardDescription>展示时段电价、基础负荷、储能充电负荷和未满足需求。</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto rounded-2xl border border-white/10 bg-slate-950/40">
+              <table className="min-w-full text-sm">
+                <thead className="bg-white/5 text-left text-slate-300">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">时段</th>
+                    <th className="px-4 py-3 font-medium">基础负荷</th>
+                    <th className="px-4 py-3 font-medium">储能充电负荷</th>
+                    <th className="px-4 py-3 font-medium">储能放电出力</th>
+                    <th className="px-4 py-3 font-medium">出清电价</th>
+                    <th className="px-4 py-3 font-medium">成交电量</th>
+                    <th className="px-4 py-3 font-medium">未满足需求</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.periodResults.map((period) => (
+                    <tr key={period.periodId} className="border-t border-white/10 text-slate-300">
+                      <td className="px-4 py-3">{period.periodLabel}</td>
+                      <td className="px-4 py-3">{period.baseLoadDemand}</td>
+                      <td className="px-4 py-3">{period.storageChargingLoad}</td>
+                      <td className="px-4 py-3">{period.storageDischargingSupply}</td>
+                      <td className="px-4 py-3">{period.clearingPrice}</td>
+                      <td className="px-4 py-3">{period.totalClearedQuantity}</td>
+                      <td className="px-4 py-3">{period.unmetDemand}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>储能时序优化</CardTitle>
+            <CardDescription>基于参考价格轨迹进行时序充放电优化，并回灌到多时段出清。</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {result.storageDispatchPlans.length > 0 ? (
+              <div className="space-y-4">
+                {result.storageDispatchPlans.map((plan) => (
+                  <div key={plan.participantId} className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                    <div className="flex flex-wrap gap-3 text-sm text-slate-300">
+                      <Badge>{plan.participantName}</Badge>
+                      <span>套利收益 {plan.netArbitrageRevenue} 元</span>
+                      <span>等效循环 {plan.equivalentCycles}</span>
+                      <span>削峰 {plan.peakLoadReduction} MW</span>
+                    </div>
+                    <div className="mt-4 overflow-x-auto">
+                      <table className="min-w-full text-sm">
+                        <thead className="text-left text-slate-400">
+                          <tr>
+                            <th className="px-3 py-2 font-medium">时段</th>
+                            <th className="px-3 py-2 font-medium">参考价格</th>
+                            <th className="px-3 py-2 font-medium">充电功率</th>
+                            <th className="px-3 py-2 font-medium">放电功率</th>
+                            <th className="px-3 py-2 font-medium">SOC 起点</th>
+                            <th className="px-3 py-2 font-medium">SOC 终点</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {plan.steps.map((step) => (
+                            <tr key={`${plan.participantId}-${step.periodId}`} className="border-t border-white/10 text-slate-300">
+                              <td className="px-3 py-2">{step.periodLabel}</td>
+                              <td className="px-3 py-2">{step.referencePrice}</td>
+                              <td className="px-3 py-2">{step.chargePower}</td>
+                              <td className="px-3 py-2">{step.dischargePower}</td>
+                              <td className="px-3 py-2">{step.socStart}</td>
+                              <td className="px-3 py-2">{step.socEnd}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-400">当前场景没有可优化的储能主体。</p>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

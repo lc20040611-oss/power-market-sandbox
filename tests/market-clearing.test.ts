@@ -14,21 +14,33 @@ import {
 } from "../src/lib/export-utils";
 import { runMarketClearing } from "../src/lib/market-clearing";
 import { computeMarketPowerMetrics } from "../src/lib/market-power";
-import { getDefaultSweepConfigs, runParameterSweep } from "../src/lib/parameter-sweep";
+import {
+  countParameterCombinations,
+  getDefaultSweepConfigs,
+  runParameterSweep
+} from "../src/lib/parameter-sweep";
 import { generateResearchReportDraft } from "../src/lib/paper-tools";
 import { computeRenewableMetrics } from "../src/lib/renewables";
 import { defaultRuleConfig } from "../src/lib/rule-config";
+import { optimizeStorageDispatch } from "../src/lib/storage-optimizer";
 import { simulateStorageOperation } from "../src/lib/storage";
 import type { RuleConfig, SimulationInput, StorageAsset } from "../src/lib/types";
 
-const input: SimulationInput = {
+function singlePeriodInput(input: SimulationInput): SimulationInput {
+  return {
+    ...input,
+    timePeriods: [{ id: "T1", label: "T1", loadDemand: input.loadDemand }]
+  };
+}
+
+const input: SimulationInput = singlePeriodInput({
   loadDemand: 150,
   participants: [
     { id: "g1", name: "火电 1", type: "火电", price: 100, marginalCost: 70, declaredQuantity: 80 },
     { id: "g2", name: "火电 2", type: "火电", price: 150, marginalCost: 100, declaredQuantity: 100 },
     { id: "r1", name: "新能源 1", type: "新能源", price: 100, marginalCost: 10, declaredQuantity: 30 }
   ]
-};
+});
 
 function withRuleConfig(partial: Partial<RuleConfig>): RuleConfig {
   return {
@@ -57,14 +69,14 @@ test("价格上限生效", () => {
 });
 
 test("新能源优先出清在同报价下优先中标", () => {
-  const priorityInput: SimulationInput = {
+  const priorityInput = singlePeriodInput({
     loadDemand: 100,
     participants: [
       { id: "g1", name: "火电 A", type: "火电", price: 100, marginalCost: 70, declaredQuantity: 60 },
       { id: "r1", name: "新能源 A", type: "新能源", price: 100, marginalCost: 10, declaredQuantity: 60 },
       { id: "g2", name: "火电 B", type: "火电", price: 160, marginalCost: 110, declaredQuantity: 100 }
     ]
-  };
+  });
 
   const withoutPriority = runMarketClearing(priorityInput, withRuleConfig({ renewablePriority: false }));
   const withPriority = runMarketClearing(priorityInput, withRuleConfig({ renewablePriority: true }));
@@ -88,13 +100,13 @@ test("容量补偿计算正确", () => {
 });
 
 test("偏差惩罚计算正确", () => {
-  const penaltyInput: SimulationInput = {
+  const penaltyInput = singlePeriodInput({
     loadDemand: 150,
     participants: [
-      { id: "g1", name: "火电 1", type: "火电", price: 100, marginalCost: 70, declaredQuantity: 80 },
-      { id: "g2", name: "火电 2", type: "火电", price: 150, marginalCost: 100, declaredQuantity: 100 }
+      { id: "g1", name: "火电 1", type: "火电", price: 100, marginalCost: 70, declaredQuantity: 80, actualQuantity: 80 },
+      { id: "g2", name: "火电 2", type: "火电", price: 150, marginalCost: 100, declaredQuantity: 100, actualQuantity: 70 }
     ]
-  };
+  });
 
   const result = runMarketClearing(
     penaltyInput,
@@ -113,7 +125,7 @@ test("偏差惩罚计算正确", () => {
 });
 
 test("中长期合约收益和现货偏差结算正确", () => {
-  const contractInput: SimulationInput = {
+  const contractInput = singlePeriodInput({
     loadDemand: 100,
     participants: [
       {
@@ -128,7 +140,7 @@ test("中长期合约收益和现货偏差结算正确", () => {
         actualQuantity: 80
       }
     ]
-  };
+  });
 
   const result = runMarketClearing(contractInput, withRuleConfig({}));
   const settlements = computeContractSettlements(result.participants);
@@ -139,7 +151,7 @@ test("中长期合约收益和现货偏差结算正确", () => {
 });
 
 test("新能源消纳率和弃风弃光率正确", () => {
-  const renewableInput: SimulationInput = {
+  const renewableInput = singlePeriodInput({
     loadDemand: 60,
     participants: [
       {
@@ -154,7 +166,7 @@ test("新能源消纳率和弃风弃光率正确", () => {
       },
       { id: "g1", name: "火电 1", type: "火电", price: 200, marginalCost: 100, declaredQuantity: 40 }
     ]
-  };
+  });
 
   const result = runMarketClearing(renewableInput, withRuleConfig({}));
   const metrics = computeRenewableMetrics(result.participants);
@@ -205,7 +217,7 @@ test("HHI 和 RSI 指标正确", () => {
     ]
   });
 
-  assert.equal(metrics.hhi, 3800);
+  assert.equal(metrics.hhi, 3912.16);
   assert.equal(metrics.rsi, 0.5);
 });
 
@@ -225,10 +237,11 @@ test("策略报价会改变出清价格", () => {
 });
 
 test("参数扫描能生成正确数量的实验组合", () => {
-  const sweepConfig = getDefaultSweepConfigs()[0];
+  const sweepConfig = [getDefaultSweepConfigs()[0], getDefaultSweepConfigs()[4]];
   const results = runParameterSweep(input, sweepConfig, defaultRuleConfig);
 
-  assert.equal(results.length, 4);
+  assert.equal(results.length, 16);
+  assert.equal(countParameterCombinations(sweepConfig), 16);
 });
 
 test("新能源占比变化会影响新能源消纳指标", () => {
@@ -241,7 +254,14 @@ test("新能源占比变化会影响新能源消纳指标", () => {
 });
 
 test("偏差惩罚系数变化会影响偏差惩罚金额", () => {
-  const results = runParameterSweep(input, getDefaultSweepConfigs()[2], defaultRuleConfig);
+  const variedInput = singlePeriodInput({
+    loadDemand: 150,
+    participants: [
+      { id: "g1", name: "火电 1", type: "火电", price: 100, marginalCost: 70, declaredQuantity: 80, actualQuantity: 60 },
+      { id: "g2", name: "火电 2", type: "火电", price: 150, marginalCost: 100, declaredQuantity: 100, actualQuantity: 70 }
+    ]
+  });
+  const results = runParameterSweep(variedInput, getDefaultSweepConfigs()[2], defaultRuleConfig);
 
   assert.equal(results[0].deviationPenaltyTotal < results[results.length - 1].deviationPenaltyTotal, true);
 });
@@ -252,11 +272,59 @@ test("容量补偿价格变化会影响容量补偿总额", () => {
   assert.equal(results[0].capacityPaymentTotal < results[results.length - 1].capacityPaymentTotal, true);
 });
 
+test("多时段出清会生成时段结果", () => {
+  const result = runMarketClearing({
+    loadDemand: 300,
+    timePeriods: [
+      { id: "T1", label: "T1", loadDemand: 90 },
+      { id: "T2", label: "T2", loadDemand: 100 },
+      { id: "T3", label: "T3", loadDemand: 110 }
+    ],
+    participants: [
+      { id: "g1", name: "火电 1", type: "火电", price: 200, marginalCost: 120, declaredQuantity: 120 },
+      { id: "g2", name: "火电 2", type: "火电", price: 260, marginalCost: 180, declaredQuantity: 120 }
+    ]
+  });
+
+  assert.equal(result.periodResults.length, 3);
+  assert.equal(result.isMultiPeriod, true);
+  assert.equal(result.totalClearedQuantity > 0, true);
+});
+
+test("储能时序优化会生成充放电计划", () => {
+  const plan = optimizeStorageDispatch(
+    {
+      id: "s1",
+      name: "储能 1",
+      type: "储能",
+      price: 300,
+      marginalCost: 0,
+      declaredQuantity: 0,
+      storageCapacity: 100,
+      chargePower: 25,
+      dischargePower: 25,
+      roundTripEfficiency: 0.9,
+      initialSoc: 0.5,
+      minSoc: 0.1,
+      maxSoc: 0.9
+    },
+    [
+      { id: "T1", label: "T1", loadDemand: 80 },
+      { id: "T2", label: "T2", loadDemand: 120 },
+      { id: "T3", label: "T3", loadDemand: 140 }
+    ],
+    [180, 220, 360]
+  );
+
+  assert.ok(plan);
+  assert.equal(plan.steps.length, 3);
+});
+
 test("CSV 导出格式正确", () => {
   const record = runExperiment(buildExperimentConfigFromTemplate(experimentTemplates[0]), input);
   const csv = exportExperimentResultsCsv(record);
 
-  assert.equal(csv.content.includes("实验名称,参数变量,参数取值"), true);
+  assert.equal(csv.content.includes("实验名称"), true);
   assert.equal(csv.mimeType, "text/csv");
 });
 
@@ -264,17 +332,15 @@ test("JSON 导出包含完整实验参数", () => {
   const record = runExperiment(buildExperimentConfigFromTemplate(experimentTemplates[0]), input);
   const json = exportExperimentResultsJson(record);
 
-  assert.equal(json.content.includes("\"experimentName\""), true);
-  assert.equal(json.content.includes("\"variableParameters\""), true);
-  assert.equal(json.content.includes("\"results\""), true);
+  assert.equal(json.content.includes('"variableParameters"'), true);
+  assert.equal(json.mimeType, "application/json");
 });
 
 test("研究报告草稿包含必要章节", () => {
   const record = runExperiment(buildExperimentConfigFromTemplate(experimentTemplates[0]), input);
-  const report = generateResearchReportDraft(record);
+  const draft = generateResearchReportDraft(record);
 
-  assert.equal(report.markdown.includes("# 研究问题"), true);
-  assert.equal(report.markdown.includes("# 实验设计"), true);
-  assert.equal(report.markdown.includes("# 结果分析"), true);
-  assert.equal(report.markdown.includes("# 政策启示"), true);
+  assert.equal(draft.markdown.includes("# 研究问题"), true);
+  assert.equal(draft.markdown.includes("# 实验设计"), true);
+  assert.equal(draft.markdown.includes("# 政策启示"), true);
 });

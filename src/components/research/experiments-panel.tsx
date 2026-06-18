@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Bar,
   BarChart,
@@ -18,61 +18,100 @@ import { demoScenarios } from "@/data/demo-scenarios";
 import {
   buildExperimentConfigFromTemplate,
   experimentTemplates,
-  runExperiment,
-  summarizeExperimentRecord
+  runExperiment
 } from "@/lib/experiment-runner";
 import { exportExperimentResultsCsv, exportExperimentResultsJson } from "@/lib/export-utils";
-import { getDefaultSweepConfigs } from "@/lib/parameter-sweep";
+import { countParameterCombinations, getDefaultSweepConfigs } from "@/lib/parameter-sweep";
 import { STORAGE_KEYS } from "@/lib/rule-config";
-import { clearStorageKeys, estimateStorageUsage, readStorage, removeStorage, writeStorage } from "@/lib/storage-utils";
+import { estimateStorageUsage, readStorage, writeStorage } from "@/lib/storage-utils";
 import type {
-  ExperimentConfig,
+  ExperimentRecordSummary,
+  ExperimentRunArchiveRecord,
   ExperimentRunRecord,
-  ExperimentRunSummary
+  ExperimentConfig,
+  ExperimentVersionRecord
 } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
-const LOCAL_KEYS = [STORAGE_KEYS.experimentSummaries, STORAGE_KEYS.selectedExperimentId];
+async function requestJson<T>(url: string, init?: RequestInit) {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {})
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+
+  return (await response.json()) as T;
+}
 
 export function ExperimentsPanel() {
   const defaultTemplate = experimentTemplates[0];
-  const [summaries, setSummaries] = useState<ExperimentRunSummary[]>([]);
+  const [catalog, setCatalog] = useState<ExperimentRecordSummary[]>([]);
+  const [runs, setRuns] = useState<ExperimentRunArchiveRecord[]>([]);
+  const [versions, setVersions] = useState<ExperimentVersionRecord[]>([]);
   const [activeRecord, setActiveRecord] = useState<ExperimentRunRecord | null>(null);
   const [config, setConfig] = useState<ExperimentConfig>(() =>
     buildExperimentConfigFromTemplate(defaultTemplate)
   );
   const [selectedExperimentId, setSelectedExperimentId] = useState<string>("");
   const [feedback, setFeedback] = useState<string>("准备运行实验");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    const savedSummaries = readStorage<ExperimentRunSummary[]>(
-      STORAGE_KEYS.experimentSummaries,
-      []
-    );
-    const savedActiveRecord = readStorage<ExperimentRunRecord | null>(
-      STORAGE_KEYS.activeExperimentRecord,
-      null,
-      "sessionStorage"
-    );
     const savedSelectedId = readStorage<string>(STORAGE_KEYS.selectedExperimentId, "");
-
-    setSummaries(savedSummaries);
-    setActiveRecord(savedActiveRecord);
-    setSelectedExperimentId(savedSelectedId || savedActiveRecord?.experimentId || savedSummaries[0]?.experimentId || "");
+    void loadCatalog(savedSelectedId);
   }, []);
 
-  const selectedSummary = useMemo(
-    () => summaries.find((summary) => summary.experimentId === selectedExperimentId) ?? summaries[0],
-    [summaries, selectedExperimentId]
+  const selectedExperiment = useMemo(
+    () => catalog.find((item) => item.id === selectedExperimentId) ?? catalog[0] ?? null,
+    [catalog, selectedExperimentId]
   );
 
-  const visibleRecord =
-    activeRecord && activeRecord.experimentId === selectedExperimentId ? activeRecord : activeRecord;
+  const selectedRun =
+    activeRecord && activeRecord.experimentId === selectedExperimentId
+      ? activeRecord
+      : runs[0]?.record ?? null;
 
-  const storageEstimate = estimateStorageUsage(LOCAL_KEYS);
+  const storageEstimate = estimateStorageUsage([STORAGE_KEYS.selectedExperimentId]);
+  const combinationCount = countParameterCombinations(config.variableParameters);
+
+  async function loadCatalog(initialSelectedId = "") {
+    try {
+      const data = await requestJson<{ experiments: ExperimentRecordSummary[] }>("/api/experiments");
+      setCatalog(data.experiments);
+
+      const nextSelectedId = initialSelectedId || data.experiments[0]?.id || "";
+      if (nextSelectedId) {
+        setSelectedExperimentId(nextSelectedId);
+        writeStorage(STORAGE_KEYS.selectedExperimentId, nextSelectedId);
+        await loadExperimentDetails(nextSelectedId);
+      }
+    } catch (error) {
+      setFeedback(`加载实验目录失败：${String(error)}`);
+    }
+  }
+
+  async function loadExperimentDetails(experimentId: string) {
+    try {
+      const [versionsResponse, runsResponse] = await Promise.all([
+        requestJson<{ versions: ExperimentVersionRecord[] }>(`/api/experiments/${experimentId}`),
+        requestJson<{ runs: ExperimentRunArchiveRecord[] }>(`/api/experiments/${experimentId}/runs`)
+      ]);
+      setVersions(versionsResponse.versions);
+      setRuns(runsResponse.runs);
+      setActiveRecord(runsResponse.runs[0]?.record ?? null);
+    } catch (error) {
+      setFeedback(`加载实验详情失败：${String(error)}`);
+    }
+  }
 
   const updateConfig = <K extends keyof ExperimentConfig>(key: K, value: ExperimentConfig[K]) => {
     setConfig((current) => ({
@@ -88,52 +127,61 @@ export function ExperimentsPanel() {
     setFeedback(`已载入模板：${template.name}`);
   };
 
-  const handleRunExperiment = () => {
-    const baseInput =
-      demoScenarios.find((scenario) => scenario.scenario === config.baseScenario)?.input ??
-      demoScenarios[0].input;
-    const record = runExperiment(config, baseInput);
-    const summary = summarizeExperimentRecord(record);
-    const nextSummaries = [summary, ...summaries.filter((item) => item.experimentId !== summary.experimentId)].slice(0, 12);
+  const handleRunExperiment = async () => {
+    setIsSubmitting(true);
+    try {
+      const baseInput =
+        demoScenarios.find((scenario) => scenario.scenario === config.baseScenario)?.input ??
+        demoScenarios[0].input;
 
-    setSummaries(nextSummaries);
-    setActiveRecord(record);
-    setSelectedExperimentId(record.experimentId);
-    writeStorage(STORAGE_KEYS.experimentSummaries, nextSummaries);
-    writeStorage(STORAGE_KEYS.activeExperimentRecord, record, "sessionStorage");
-    writeStorage(STORAGE_KEYS.selectedExperimentId, record.experimentId);
-    setFeedback(`实验运行完成，共生成 ${record.results.length} 组参数结果`);
-  };
+      const saveResult = await requestJson<{ version: number; updatedAt: string }>("/api/experiments", {
+        method: "POST",
+        body: JSON.stringify(config)
+      });
 
-  const handleSelectExperiment = (experimentId: string) => {
-    setSelectedExperimentId(experimentId);
-    writeStorage(STORAGE_KEYS.selectedExperimentId, experimentId);
-    if (activeRecord?.experimentId !== experimentId) {
-      setFeedback("该实验仅保留摘要。完整结果请在当前会话中重新运行。");
-    } else {
-      setFeedback("已切换到当前会话中的完整实验结果。");
+      const record = runExperiment(config, baseInput);
+      record.sourceVersion = saveResult.version;
+
+      const runResponse = await requestJson<{ record: ExperimentRunRecord }>(
+        `/api/experiments/${config.id}/runs`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            experimentVersion: saveResult.version,
+            record
+          })
+        }
+      );
+
+      setActiveRecord(runResponse.record);
+      setSelectedExperimentId(config.id);
+      writeStorage(STORAGE_KEYS.selectedExperimentId, config.id);
+      await loadCatalog(config.id);
+      setFeedback(`实验已存档，版本 v${saveResult.version}，共 ${record.results.length} 组结果`);
+    } catch (error) {
+      setFeedback(`实验运行失败：${String(error)}`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const clearExperimentData = () => {
-    setSummaries([]);
-    setActiveRecord(null);
-    setSelectedExperimentId("");
-    clearStorageKeys(LOCAL_KEYS);
-    removeStorage(STORAGE_KEYS.activeExperimentRecord, "sessionStorage");
-    setFeedback("本地实验摘要和当前会话结果已清空。");
+  const handleSelectExperiment = async (experimentId: string) => {
+    setSelectedExperimentId(experimentId);
+    writeStorage(STORAGE_KEYS.selectedExperimentId, experimentId);
+    await loadExperimentDetails(experimentId);
+    setFeedback("已切换到数据库中的实验记录。");
   };
 
   const downloadExport = (type: "csv" | "json") => {
-    if (!visibleRecord || visibleRecord.experimentId !== selectedExperimentId) {
-      setFeedback("当前仅有摘要，无法导出完整结果。请重新运行该实验。");
+    if (!selectedRun) {
+      setFeedback("当前没有可导出的实验结果。");
       return;
     }
 
     const exportData =
       type === "csv"
-        ? exportExperimentResultsCsv(visibleRecord)
-        : exportExperimentResultsJson(visibleRecord);
+        ? exportExperimentResultsCsv(selectedRun)
+        : exportExperimentResultsJson(selectedRun);
     const blob = new Blob([exportData.content], { type: exportData.mimeType });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -149,7 +197,7 @@ export function ExperimentsPanel() {
       <Card>
         <CardHeader>
           <CardTitle>创建实验</CardTitle>
-          <CardDescription>支持论文分析、课题研究和政策模拟的实验配置工作流。</CardDescription>
+          <CardDescription>已支持多变量组合实验、SQLite 存档和实验版本管理。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="flex flex-wrap gap-3">
@@ -180,15 +228,63 @@ export function ExperimentsPanel() {
                 ))}
               </select>
             </Field>
-            <Field label="变量参数">
+            <Field label="变量参数 1">
               <select
                 className="flex h-10 w-full rounded-md border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
                 value={config.variableParameters[0]?.parameterKey}
                 onChange={(event) => {
                   const sweep = getDefaultSweepConfigs().find((item) => item.parameterKey === event.target.value);
-                  if (sweep) updateConfig("variableParameters", [sweep]);
+                  if (!sweep) return;
+                  updateConfig("variableParameters", [sweep, ...config.variableParameters.slice(1, 3)]);
                 }}
               >
+                {getDefaultSweepConfigs().map((sweep) => (
+                  <option key={sweep.parameterKey} value={sweep.parameterKey} className="bg-slate-950">
+                    {sweep.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="变量参数 2">
+              <select
+                className="flex h-10 w-full rounded-md border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                value={config.variableParameters[1]?.parameterKey ?? ""}
+                onChange={(event) => {
+                  if (!event.target.value) {
+                    updateConfig("variableParameters", config.variableParameters.slice(0, 1));
+                    return;
+                  }
+                  const sweep = getDefaultSweepConfigs().find((item) => item.parameterKey === event.target.value);
+                  if (!sweep) return;
+                  updateConfig("variableParameters", [config.variableParameters[0] ?? sweep, sweep, ...config.variableParameters.slice(2, 3)]);
+                }}
+              >
+                <option value="" className="bg-slate-950">不启用</option>
+                {getDefaultSweepConfigs().map((sweep) => (
+                  <option key={sweep.parameterKey} value={sweep.parameterKey} className="bg-slate-950">
+                    {sweep.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="变量参数 3">
+              <select
+                className="flex h-10 w-full rounded-md border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                value={config.variableParameters[2]?.parameterKey ?? ""}
+                onChange={(event) => {
+                  if (!event.target.value) {
+                    updateConfig("variableParameters", config.variableParameters.slice(0, 2));
+                    return;
+                  }
+                  const sweep = getDefaultSweepConfigs().find((item) => item.parameterKey === event.target.value);
+                  if (!sweep) return;
+                  updateConfig(
+                    "variableParameters",
+                    [config.variableParameters[0], config.variableParameters[1], sweep].filter(Boolean) as ExperimentConfig["variableParameters"]
+                  );
+                }}
+              >
+                <option value="" className="bg-slate-950">不启用</option>
                 {getDefaultSweepConfigs().map((sweep) => (
                   <option key={sweep.parameterKey} value={sweep.parameterKey} className="bg-slate-950">
                     {sweep.label}
@@ -207,8 +303,13 @@ export function ExperimentsPanel() {
           </Field>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Button size="lg" onClick={handleRunExperiment}>
-              运行实验
+            <Badge>组合数 {combinationCount}</Badge>
+            <Badge variant="secondary">浏览器缓存估算 {storageEstimate} 字节</Badge>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <Button size="lg" onClick={handleRunExperiment} disabled={isSubmitting}>
+              {isSubmitting ? "运行中..." : "运行实验"}
             </Button>
             <span className="text-sm text-cyan-200">{feedback}</span>
           </div>
@@ -217,42 +318,33 @@ export function ExperimentsPanel() {
 
       <Card>
         <CardHeader>
-          <CardTitle>实验运行记录</CardTitle>
-          <CardDescription>
-            `localStorage` 仅保存最近实验摘要和选择状态；完整实验结果仅保存在当前会话中，避免长期占用本地存储。
-          </CardDescription>
+          <CardTitle>实验版本与运行记录</CardTitle>
+          <CardDescription>配置版本和运行结果已持久化到 SQLite，不再依赖 `localStorage` 保存完整实验数据。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex flex-wrap gap-3">
-            <Badge>本地存储估算 {storageEstimate} 字节</Badge>
-            <Button size="sm" variant="outline" onClick={clearExperimentData}>
-              清空本地实验数据
-            </Button>
-          </div>
-
-          {summaries.length > 0 ? (
+          {catalog.length > 0 ? (
             <div className="flex flex-wrap gap-3">
-              {summaries.map((summary) => (
+              {catalog.map((summary) => (
                 <Button
-                  key={summary.experimentId}
-                  variant={summary.experimentId === selectedSummary?.experimentId ? "default" : "outline"}
+                  key={summary.id}
+                  variant={summary.id === selectedExperiment?.id ? "default" : "outline"}
                   size="sm"
-                  onClick={() => handleSelectExperiment(summary.experimentId)}
+                  onClick={() => void handleSelectExperiment(summary.id)}
                 >
                   {summary.experimentName}
                 </Button>
               ))}
             </div>
           ) : (
-            <p className="text-sm text-slate-400">尚无实验摘要，请先运行一次实验。</p>
+            <p className="text-sm text-slate-400">尚无数据库实验记录，请先运行一次实验。</p>
           )}
 
-          {selectedSummary ? (
+          {selectedExperiment ? (
             <>
               <div className="flex flex-wrap gap-3">
-                <Badge>运行时间 {selectedSummary.runAt}</Badge>
-                <Badge variant="secondary">参数 {selectedSummary.parameterLabel}</Badge>
-                <Badge variant="secondary">结果组数 {selectedSummary.resultCount}</Badge>
+                <Badge>最新版本 v{selectedExperiment.latestVersion}</Badge>
+                <Badge variant="secondary">最近更新 {selectedExperiment.updatedAt}</Badge>
+                <Badge variant="secondary">运行次数 {runs.length}</Badge>
                 <Button size="sm" variant="outline" onClick={() => downloadExport("csv")}>
                   导出 CSV
                 </Button>
@@ -261,15 +353,27 @@ export function ExperimentsPanel() {
                 </Button>
               </div>
 
-              {visibleRecord && visibleRecord.experimentId === selectedSummary.experimentId ? (
+              {versions.length > 0 ? (
+                <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-300">
+                  <p className="font-medium text-white">配置版本</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {versions.map((version) => (
+                      <Badge key={`${version.experimentId}-${version.version}`} variant="secondary">
+                        v{version.version} · {version.createdAt}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {selectedRun ? (
                 <>
                   <div className="overflow-x-auto rounded-2xl border border-white/10 bg-slate-950/40">
                     <table className="min-w-full text-sm">
                       <thead className="bg-white/5 text-left text-slate-300">
                         <tr>
                           <th className="px-4 py-3 font-medium">实验名称</th>
-                          <th className="px-4 py-3 font-medium">参数变量</th>
-                          <th className="px-4 py-3 font-medium">参数取值</th>
+                          <th className="px-4 py-3 font-medium">组合</th>
                           <th className="px-4 py-3 font-medium">出清电价</th>
                           <th className="px-4 py-3 font-medium">用户成本</th>
                           <th className="px-4 py-3 font-medium">系统成本</th>
@@ -280,11 +384,10 @@ export function ExperimentsPanel() {
                         </tr>
                       </thead>
                       <tbody>
-                        {visibleRecord.results.map((result, index) => (
-                          <tr key={`${visibleRecord.experimentId}-${index}`} className="border-t border-white/10 text-slate-300">
-                            <td className="px-4 py-3">{visibleRecord.experimentName}</td>
-                            <td className="px-4 py-3">{result.parameterLabel}</td>
-                            <td className="px-4 py-3">{String(result.parameterValue)}</td>
+                        {selectedRun.results.map((result, index) => (
+                          <tr key={`${selectedRun.experimentId}-${index}`} className="border-t border-white/10 text-slate-300">
+                            <td className="px-4 py-3">{selectedRun.experimentName}</td>
+                            <td className="px-4 py-3">{result.combinationLabel}</td>
                             <td className="px-4 py-3">{result.clearingPrice}</td>
                             <td className="px-4 py-3">{result.customerPurchaseCost}</td>
                             <td className="px-4 py-3">{result.totalSystemCost}</td>
@@ -299,17 +402,17 @@ export function ExperimentsPanel() {
                   </div>
 
                   <div className="grid gap-6 xl:grid-cols-2">
-                    <MetricLineChart title="参数变化 vs 出清电价" data={visibleRecord.chartData} lineKey="clearingPrice" />
-                    <MetricLineChart title="参数变化 vs 用户购电成本" data={visibleRecord.chartData} lineKey="customerPurchaseCost" />
-                    <MetricLineChart title="参数变化 vs 新能源消纳率" data={visibleRecord.chartData} lineKey="renewableConsumptionRate" />
-                    <MetricLineChart title="参数变化 vs 弃风弃光率" data={visibleRecord.chartData} lineKey="curtailmentRate" />
-                    <MetricLineChart title="参数变化 vs 社会福利" data={visibleRecord.chartData} lineKey="socialWelfare" />
-                    <MetricBarChart title="参数变化 vs 市场力风险指标" data={visibleRecord.chartData} barKey="hhi" />
+                    <MetricLineChart title="组合结果 vs 出清电价" data={selectedRun.chartData} lineKey="clearingPrice" />
+                    <MetricLineChart title="组合结果 vs 用户购电成本" data={selectedRun.chartData} lineKey="customerPurchaseCost" />
+                    <MetricLineChart title="组合结果 vs 新能源消纳率" data={selectedRun.chartData} lineKey="renewableConsumptionRate" />
+                    <MetricLineChart title="组合结果 vs 弃风弃光率" data={selectedRun.chartData} lineKey="curtailmentRate" />
+                    <MetricLineChart title="组合结果 vs 社会福利" data={selectedRun.chartData} lineKey="socialWelfare" />
+                    <MetricBarChart title="组合结果 vs 市场力风险指标" data={selectedRun.chartData} barKey="hhi" />
                   </div>
                 </>
               ) : (
                 <p className="rounded-2xl border border-dashed border-white/10 p-4 text-sm text-slate-400">
-                  当前实验只保留了摘要。若要查看完整图表和结果，请重新运行该实验。
+                  该实验目前还没有运行记录。
                 </p>
               )}
             </>
@@ -320,9 +423,9 @@ export function ExperimentsPanel() {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <label className="block space-y-2 text-sm text-slate-300">
+    <label className="space-y-2 text-sm text-slate-300">
       <span>{label}</span>
       {children}
     </label>
@@ -338,31 +441,20 @@ function MetricLineChart({
   data: Array<Record<string, string | number>>;
   lineKey: string;
 }) {
-  if (data.length === 0) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>{title}</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm text-slate-400">暂无图表数据。</CardContent>
-      </Card>
-    );
-  }
-
   return (
-    <Card className="h-[340px]">
+    <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
       </CardHeader>
-      <CardContent className="h-[260px]">
+      <CardContent className="h-80">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data}>
-            <CartesianGrid stroke="rgba(148,163,184,0.16)" strokeDasharray="3 3" />
-            <XAxis dataKey="parameterValue" stroke="#cbd5e1" />
-            <YAxis stroke="#cbd5e1" />
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+            <XAxis dataKey="combinationLabel" hide />
+            <YAxis stroke="rgba(148,163,184,0.8)" />
             <Tooltip />
             <Legend />
-            <Line type="monotone" dataKey={lineKey} stroke="#38bdf8" strokeWidth={2} />
+            <Line type="monotone" dataKey={lineKey} stroke="#38bdf8" strokeWidth={2} dot={{ r: 2 }} />
           </LineChart>
         </ResponsiveContainer>
       </CardContent>
@@ -379,30 +471,20 @@ function MetricBarChart({
   data: Array<Record<string, string | number>>;
   barKey: string;
 }) {
-  if (data.length === 0) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>{title}</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm text-slate-400">暂无图表数据。</CardContent>
-      </Card>
-    );
-  }
-
   return (
-    <Card className="h-[340px]">
+    <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
       </CardHeader>
-      <CardContent className="h-[260px]">
+      <CardContent className="h-80">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data}>
-            <CartesianGrid stroke="rgba(148,163,184,0.16)" strokeDasharray="3 3" />
-            <XAxis dataKey="parameterValue" stroke="#cbd5e1" />
-            <YAxis stroke="#cbd5e1" />
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+            <XAxis dataKey="combinationLabel" hide />
+            <YAxis stroke="rgba(148,163,184,0.8)" />
             <Tooltip />
-            <Bar dataKey={barKey} fill="#22d3ee" radius={[8, 8, 0, 0]} />
+            <Legend />
+            <Bar dataKey={barKey} fill="#0ea5e9" radius={[8, 8, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </CardContent>

@@ -7,6 +7,7 @@
     "build": "next build --webpack",
     "start": "next start",
     "test": "tsc -p tsconfig.test.json && node --test .tmp-tests/tests/market-clearing.test.js",
+    "test:e2e": "playwright test",
     "lint": "eslint src tests --ext .ts,.tsx"
   },
   "dependencies": {
@@ -25,6 +26,7 @@
     "@types/react-dom": "^19.2.2",
     "@typescript-eslint/eslint-plugin": "^8.61.1",
     "@typescript-eslint/parser": "^8.61.1",
+    "@playwright/test": "^1.55.0",
     "autoprefixer": "^10.4.21",
     "eslint": "^10.5.0",
     "postcss": "^8.5.6",
