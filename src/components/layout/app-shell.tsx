@@ -50,7 +50,7 @@ export function AppShell({
               <p className="text-sm uppercase tracking-[0.35em] text-cyan-300">Power Market Rule Sandbox</p>
               <h1 className="text-3xl font-semibold tracking-tight text-white">中国电力市场规则沙盒平台</h1>
               <p className="max-w-3xl text-sm text-slate-300">
-                面向规则设计、机制评估与交易仿真的教学研究原型。当前版本聚焦单时段统一出清与规则情景对比。
+                面向规则设计、机制评估与交易仿真的教学研究平台。当前版本已支持多时段出清、规则情景对比、组合实验与版本化结果存档。
               </p>
             </div>
             <div className="flex items-center gap-3 rounded-2xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-3 text-sm text-cyan-100">

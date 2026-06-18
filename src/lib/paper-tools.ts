@@ -15,7 +15,8 @@ function average(values: number[]) {
 }
 
 export function buildPaperChartTitle(record: ExperimentRunRecord, metricName: PaperChartConfig["metricName"]) {
-  const parameterLabel = record.variableParameters[0]?.label ?? "参数";
+  const parameterLabel =
+    record.variableParameters.map((item) => item.label).join(" + ") || "参数组合";
   return `${parameterLabel}对${metricTitles[metricName]}的影响`;
 }
 
@@ -29,8 +30,10 @@ export function generateInsightText(
   const trend = last > first ? "上升" : last < first ? "下降" : "基本稳定";
   const renewableAvg = average(record.results.map((result) => result.renewableConsumptionRate));
   const curtailmentAvg = average(record.results.map((result) => result.curtailmentRate));
+  const parameterLabel =
+    record.variableParameters.map((item) => item.label).join(" + ") || "关键参数组合";
 
-  return `从实验结果可以看出，随着${record.variableParameters[0]?.label ?? "关键参数"}变化，${
+  return `从实验结果可以看出，随着${parameterLabel}变化，${
     metricTitles[metricName]
   }整体呈现${trend}趋势。平均新能源消纳率为${(renewableAvg * 100).toFixed(
     2
@@ -40,8 +43,10 @@ export function generateInsightText(
 }
 
 export function generateResearchReportDraft(record: ExperimentRunRecord): ResearchReportDraft {
-  const parameterLabel = record.variableParameters[0]?.label ?? "参数";
-  const parameterValues = record.variableParameters[0]?.values.join(", ") ?? "";
+  const parameterLabel = record.variableParameters.map((item) => item.label).join(" + ") || "参数组合";
+  const parameterValues = record.variableParameters
+    .map((item) => `${item.label}: ${item.values.join(", ")}`)
+    .join("；");
   const averageWelfare = average(record.results.map((result) => result.socialWelfare)).toFixed(2);
 
   const markdown = `# 研究问题
@@ -68,7 +73,7 @@ ${generateInsightText(record, "socialWelfare")}
 实验表明，关键规则参数调整会同时影响价格、收益分配与新能源消纳表现，政策设计应兼顾效率、成本与可靠性目标。
 
 # 模型局限性
-当前模型采用单时段简化出清、启发式储能策略与简化容量机制，尚未纳入网络约束、多时段联立优化和真实行为博弈。`;
+当前模型已支持多时段逐时出清、储能时序优化与数据库化实验存档，但仍采用简化容量机制，尚未纳入网络约束、完整机组组合优化和真实行为博弈。`;
 
   return {
     title: `${record.experimentName}研究报告草稿`,

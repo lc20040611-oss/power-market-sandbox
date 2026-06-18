@@ -22,7 +22,7 @@ const modules = [
     title: "市场仿真",
     href: "/simulation",
     icon: Cpu,
-    description: "输入报价、电量、负荷、新能源预测、储能参数与偏差考核系数，执行简化出清。"
+    description: "输入报价、电量、负荷、新能源预测与储能参数，执行多时段出清与储能时序优化。"
   },
   {
     title: "结果分析",
@@ -46,7 +46,7 @@ export default function HomePage() {
               </span>
             </CardTitle>
             <CardDescription className="max-w-2xl text-base leading-7">
-              这个 MVP 适合做课堂演示、规则讨论和初步机制对比。当前版本使用本地 JSON 与单时段统一边际出清，后续可逐步演进到多时段、多约束和数据库版实验平台。
+              这个研究原型适合做课堂演示、规则讨论和初步机制对比。当前版本已支持多时段出清、储能时序优化、组合实验和数据库化实验存档，后续可继续扩展网络约束与更高精度机组模型。
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-3">
