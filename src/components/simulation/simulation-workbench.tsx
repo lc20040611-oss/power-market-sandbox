@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { scenarioPresets } from "@/data/scenario-presets";
 import { AwardChart, BidCurveChart, ProfitChart } from "@/components/charts/chart-shell";
 import { runMarketClearing } from "@/lib/market-clearing";
+import { createEmptyClearingResult, normalizeClearingResult, normalizeRuleConfig, normalizeSimulationInput } from "@/lib/runtime-guards";
 import { defaultRuleConfig, STORAGE_KEYS } from "@/lib/rule-config";
 import { readStorage, writeStorage } from "@/lib/storage-utils";
 import type {
@@ -22,16 +23,51 @@ import { Input } from "@/components/ui/input";
 const defaultScenario = scenarioPresets[0].input;
 const participantTypes: ParticipantType[] = ["火电", "新能源", "储能"];
 
+function formatError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function SimulationWorkbench() {
-  const [form, setForm] = useState<SimulationInput>(defaultScenario);
-  const [ruleConfig, setRuleConfig] = useState<RuleConfig>(defaultRuleConfig);
+  const [form, setForm] = useState<SimulationInput>(() => normalizeSimulationInput(defaultScenario, defaultScenario));
+  const [ruleConfig, setRuleConfig] = useState<RuleConfig>(() => normalizeRuleConfig(defaultRuleConfig));
   const [result, setResult] = useState<ClearingResult>(() =>
-    runMarketClearing(defaultScenario, defaultRuleConfig)
+    normalizeClearingResult(
+      runMarketClearing(defaultScenario, defaultRuleConfig),
+      defaultScenario,
+      defaultRuleConfig
+    )
   );
+  const [isRunning, setIsRunning] = useState(false);
+  const [feedback, setFeedback] = useState("准备运行仿真");
 
   useEffect(() => {
-    setForm(readStorage<SimulationInput>(STORAGE_KEYS.marketInput, defaultScenario));
-    setRuleConfig(readStorage<RuleConfig>(STORAGE_KEYS.ruleConfig, defaultRuleConfig));
+    const storedInput = normalizeSimulationInput(
+      readStorage<SimulationInput>(STORAGE_KEYS.marketInput, defaultScenario),
+      defaultScenario
+    );
+    const storedRuleConfig = normalizeRuleConfig(
+      readStorage<RuleConfig>(STORAGE_KEYS.ruleConfig, defaultRuleConfig)
+    );
+
+    setForm(storedInput);
+    setRuleConfig(storedRuleConfig);
+
+    try {
+      setResult(
+        normalizeClearingResult(
+          runMarketClearing(storedInput, storedRuleConfig),
+          storedInput,
+          storedRuleConfig
+        )
+      );
+    } catch (error) {
+      console.error("[simulation] failed to restore saved run", error, {
+        input: storedInput,
+        ruleConfig: storedRuleConfig
+      });
+      setResult(createEmptyClearingResult(storedRuleConfig, storedInput.participants));
+      setFeedback(`恢复历史仿真失败：${formatError(error)}`);
+    }
   }, []);
 
   useEffect(() => {
@@ -41,7 +77,7 @@ export function SimulationWorkbench() {
   const updateLoadDemand = (value: string) => {
     setForm((current) => ({
       ...current,
-      loadDemand: Number(value)
+      loadDemand: value === "" ? 0 : Number(value)
     }));
   };
 
@@ -62,23 +98,77 @@ export function SimulationWorkbench() {
               [field]:
                 field === "name" || field === "type"
                   ? value
-                  : Number(value)
+                  : value === ""
+                    ? 0
+                    : Number(value)
             }
           : participant
       )
     }));
   };
 
-  const handleRun = () => {
-    writeStorage(STORAGE_KEYS.marketInput, form);
-    writeStorage(STORAGE_KEYS.ruleConfig, ruleConfig);
-    setResult(runMarketClearing(form, ruleConfig));
+  const handleRun = async () => {
+    const normalizedInput = normalizeSimulationInput(form, defaultScenario);
+    const normalizedRuleConfig = normalizeRuleConfig(ruleConfig);
+
+    setIsRunning(true);
+    setFeedback("仿真运行中...");
+    writeStorage(STORAGE_KEYS.marketInput, normalizedInput);
+    writeStorage(STORAGE_KEYS.ruleConfig, normalizedRuleConfig);
+    console.info("[simulation] run requested", {
+      input: normalizedInput,
+      ruleConfig: normalizedRuleConfig
+    });
+
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
+    await new Promise<void>((resolve) => {
+      window.setTimeout(() => resolve(), 180);
+    });
+
+    try {
+      const nextResult = normalizeClearingResult(
+        runMarketClearing(normalizedInput, normalizedRuleConfig),
+        normalizedInput,
+        normalizedRuleConfig
+      );
+      console.info("[simulation] run result", nextResult);
+      setForm(normalizedInput);
+      setRuleConfig(normalizedRuleConfig);
+      setResult(nextResult);
+      setFeedback(
+        `仿真完成：出清电价 ${nextResult.clearingPrice} 元/MWh，成交电量 ${nextResult.totalClearedQuantity} MWh`
+      );
+    } catch (error) {
+      console.error("[simulation] run failed", error, {
+        input: normalizedInput,
+        ruleConfig: normalizedRuleConfig
+      });
+      setResult(createEmptyClearingResult(normalizedRuleConfig, normalizedInput.participants));
+      setFeedback(`仿真失败：${formatError(error)}`);
+    } finally {
+      setIsRunning(false);
+    }
   };
 
   const loadScenario = (index: number) => {
-    const selected = scenarioPresets[index].input;
+    const selected = normalizeSimulationInput(scenarioPresets[index].input, defaultScenario);
     setForm(selected);
-    setResult(runMarketClearing(selected, ruleConfig));
+    setFeedback(`已载入场景：${scenarioPresets[index].scenario}`);
+    try {
+      setResult(
+        normalizeClearingResult(runMarketClearing(selected, ruleConfig), selected, ruleConfig)
+      );
+    } catch (error) {
+      console.error("[simulation] scenario load failed", error, {
+        scenario: scenarioPresets[index].scenario,
+        input: selected,
+        ruleConfig
+      });
+      setResult(createEmptyClearingResult(ruleConfig, selected.participants));
+      setFeedback(`场景加载失败：${formatError(error)}`);
+    }
   };
 
   return (
@@ -199,9 +289,12 @@ export function SimulationWorkbench() {
             </div>
           </div>
 
-          <Button size="lg" onClick={handleRun}>
-            运行仿真
-          </Button>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button size="lg" onClick={() => void handleRun()} disabled={isRunning}>
+              {isRunning ? "运行中..." : "运行仿真"}
+            </Button>
+            <span className="text-sm text-cyan-200">{feedback}</span>
+          </div>
         </CardContent>
       </Card>
 
