@@ -1,4 +1,5 @@
 import { clampPrice, defaultRuleConfig } from "./rule-config";
+import { normalizeRuleConfig, normalizeSimulationInput } from "./runtime-guards";
 import { optimizeStorageDispatch } from "./storage-optimizer";
 import type {
   ClearingResult,
@@ -415,16 +416,18 @@ export function runMarketClearing(
   input: SimulationInput,
   config: RuleConfig = defaultRuleConfig
 ): ClearingResult {
-  const periods = normalizeTimePeriods(input);
-  const referencePrices = buildReferencePriceCurve(input, config, periods);
-  const storageDispatchPlans = input.participants
+  const safeInput = normalizeSimulationInput(input, input);
+  const safeConfig = normalizeRuleConfig(config);
+  const periods = normalizeTimePeriods(safeInput);
+  const referencePrices = buildReferencePriceCurve(safeInput, safeConfig, periods);
+  const storageDispatchPlans = safeInput.participants
     .map((participant) => optimizeStorageDispatch(participant, periods, referencePrices))
     .filter((plan): plan is StorageDispatchPlan => Boolean(plan));
   const periodResults = periods.map((period, periodIndex) =>
-    runSinglePeriodClearing(input.participants, periods, period, periodIndex, config, storageDispatchPlans)
+    runSinglePeriodClearing(safeInput.participants, periods, period, periodIndex, safeConfig, storageDispatchPlans)
   );
 
-  return aggregateClearingResult(input, config, periodResults, storageDispatchPlans);
+  return aggregateClearingResult(safeInput, safeConfig, periodResults, storageDispatchPlans);
 }
 
 export function compareScenarios(
