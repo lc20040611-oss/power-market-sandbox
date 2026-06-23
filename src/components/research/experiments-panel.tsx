@@ -46,10 +46,15 @@ async function requestJson<T>(url: string, init?: RequestInit) {
   });
 
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+    const details = (await response.text()).slice(0, 300);
+    throw new Error([`${response.status} ${response.statusText}`, details].filter(Boolean).join("："));
   }
 
   return (await response.json()) as T;
+}
+
+function buildDraftConfig(template: (typeof experimentTemplates)[number]) {
+  return buildExperimentConfigFromTemplate(template, { id: `${template.id}-draft` });
 }
 
 export function ExperimentsPanel() {
@@ -59,14 +64,17 @@ export function ExperimentsPanel() {
   const [versions, setVersions] = useState<ExperimentVersionRecord[]>([]);
   const [activeRecord, setActiveRecord] = useState<ExperimentRunRecord | null>(null);
   const [config, setConfig] = useState<ExperimentConfig>(() =>
-    buildExperimentConfigFromTemplate(defaultTemplate)
+    buildDraftConfig(defaultTemplate)
   );
   const [selectedExperimentId, setSelectedExperimentId] = useState<string>("");
   const [feedback, setFeedback] = useState<string>("准备运行实验");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [storageEstimate, setStorageEstimate] = useState(0);
 
   useEffect(() => {
     const savedSelectedId = readStorage<string>(STORAGE_KEYS.selectedExperimentId, "");
+    setConfig(buildExperimentConfigFromTemplate(defaultTemplate));
+    setStorageEstimate(estimateStorageUsage([STORAGE_KEYS.selectedExperimentId]));
     void loadCatalog(savedSelectedId);
   }, []);
 
@@ -80,7 +88,6 @@ export function ExperimentsPanel() {
       ? activeRecord
       : runs[0]?.record ?? null;
 
-  const storageEstimate = estimateStorageUsage([STORAGE_KEYS.selectedExperimentId]);
   const combinationCount = countParameterCombinations(config.variableParameters);
 
   async function loadCatalog(initialSelectedId = "") {
@@ -133,17 +140,20 @@ export function ExperimentsPanel() {
       const baseInput =
         demoScenarios.find((scenario) => scenario.scenario === config.baseScenario)?.input ??
         demoScenarios[0].input;
+      const runConfig = config.id.endsWith("-draft")
+        ? { ...config, id: `${config.id.slice(0, -"-draft".length)}-${Date.now()}` }
+        : config;
 
       const saveResult = await requestJson<{ version: number; updatedAt: string }>("/api/experiments", {
         method: "POST",
-        body: JSON.stringify(config)
+        body: JSON.stringify(runConfig)
       });
 
-      const record = runExperiment(config, baseInput);
+      const record = runExperiment(runConfig, baseInput);
       record.sourceVersion = saveResult.version;
 
       const runResponse = await requestJson<{ record: ExperimentRunRecord }>(
-        `/api/experiments/${config.id}/runs`,
+        `/api/experiments/${runConfig.id}/runs`,
         {
           method: "POST",
           body: JSON.stringify({
@@ -154,9 +164,10 @@ export function ExperimentsPanel() {
       );
 
       setActiveRecord(runResponse.record);
-      setSelectedExperimentId(config.id);
-      writeStorage(STORAGE_KEYS.selectedExperimentId, config.id);
-      await loadCatalog(config.id);
+      setSelectedExperimentId(runConfig.id);
+      writeStorage(STORAGE_KEYS.selectedExperimentId, runConfig.id);
+      setStorageEstimate(estimateStorageUsage([STORAGE_KEYS.selectedExperimentId]));
+      await loadCatalog(runConfig.id);
       setFeedback(`实验已存档，版本 v${saveResult.version}，共 ${record.results.length} 组结果`);
     } catch (error) {
       setFeedback(`实验运行失败：${String(error)}`);
