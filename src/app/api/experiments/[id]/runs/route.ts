@@ -9,20 +9,36 @@ export async function GET(
   _request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
-  const params = await context.params;
-  return NextResponse.json({ runs: listExperimentRuns(params.id) });
+  try {
+    const params = await context.params;
+    return NextResponse.json({ runs: listExperimentRuns(params.id) });
+  } catch (error) {
+    console.error("[api/experiments/:id/runs] list failed", error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : String(error) },
+      { status: 500 }
+    );
+  }
 }
 
 export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
-  const params = await context.params;
-  const payload = (await request.json()) as {
-    experimentVersion: number;
-    record: ExperimentRunRecord;
-  };
+  try {
+    const params = await context.params;
+    const payload = (await request.json()) as {
+      experimentVersion: number;
+      record: ExperimentRunRecord;
+    };
 
-  const archived = saveExperimentRun(params.id, payload.experimentVersion, payload.record);
-  return NextResponse.json({ record: archived });
+    const archived = saveExperimentRun(params.id, payload.experimentVersion, payload.record);
+    return NextResponse.json({ record: archived });
+  } catch (error) {
+    console.error("[api/experiments/:id/runs] save failed", error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : String(error) },
+      { status: 500 }
+    );
+  }
 }
