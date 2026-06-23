@@ -102,10 +102,10 @@ export const experimentTemplates: ExperimentTemplate[] = [
 
 export function buildExperimentConfigFromTemplate(
   template: ExperimentTemplate,
-  overrides: Partial<Pick<ExperimentConfig, "experimentName" | "researchQuestion" | "notes">> = {}
+  overrides: Partial<Pick<ExperimentConfig, "id" | "experimentName" | "researchQuestion" | "notes">> = {}
 ): ExperimentConfig {
   return {
-    id: `${template.id}-${Date.now()}`,
+    id: overrides.id ?? `${template.id}-${Date.now()}`,
     experimentName: overrides.experimentName ?? template.name,
     researchQuestion: overrides.researchQuestion ?? template.description,
     baseScenario: template.config.baseScenario,
