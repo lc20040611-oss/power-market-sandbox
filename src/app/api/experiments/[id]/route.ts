@@ -8,6 +8,14 @@ export async function GET(
   _request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
-  const params = await context.params;
-  return NextResponse.json({ versions: getExperimentVersions(params.id) });
+  try {
+    const params = await context.params;
+    return NextResponse.json({ versions: getExperimentVersions(params.id) });
+  } catch (error) {
+    console.error("[api/experiments/:id] list versions failed", error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : String(error) },
+      { status: 500 }
+    );
+  }
 }
