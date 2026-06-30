@@ -278,8 +278,8 @@ export function SimulationWorkbench() {
   };
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-      <Card>
+    <div className="grid min-w-0 gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+      <Card className="min-w-0">
         <CardHeader>
           <CardTitle>市场仿真输入</CardTitle>
           <CardDescription>保持现有页面结构，仿真时会自动应用当前规则配置。</CardDescription>
@@ -326,8 +326,8 @@ export function SimulationWorkbench() {
 
           <NumberField label="负荷需求 (MWh)" value={form.loadDemand} onChange={updateLoadDemand} />
 
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="text-base font-semibold">可编辑输入表格</h3>
               <div className="flex items-center gap-2">
                 <Badge variant="secondary">规则研究沙盒输入</Badge>
@@ -338,7 +338,18 @@ export function SimulationWorkbench() {
               </div>
             </div>
             <div className="overflow-x-auto rounded-2xl border border-white/10 bg-slate-950/40">
-              <table className="min-w-full text-sm">
+              <table className="min-w-[1180px] table-fixed text-sm">
+                <colgroup>
+                  <col className="w-[160px]" />
+                  <col className="w-[120px]" />
+                  <col className="w-[110px]" />
+                  <col className="w-[120px]" />
+                  <col className="w-[120px]" />
+                  <col className="w-[120px]" />
+                  <col className="w-[120px]" />
+                  <col className="w-[130px]" />
+                  <col className="w-[120px]" />
+                </colgroup>
                 <thead className="bg-white/5 text-left text-slate-300">
                   <tr>
                     <th className="px-4 py-3 font-medium">主体名称</th>
@@ -357,13 +368,14 @@ export function SimulationWorkbench() {
                     <tr key={participant.id} className="border-t border-white/10">
                       <td className="px-4 py-3">
                         <Input
+                          className="min-w-[128px] bg-slate-950/80 text-slate-50"
                           value={participant.name}
                           onChange={(event) => updateParticipant(index, "name", event.target.value)}
                         />
                       </td>
                       <td className="px-4 py-3">
                         <select
-                          className="flex h-10 w-full rounded-md border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                          className="flex h-10 min-w-[88px] w-full rounded-md border border-white/10 bg-slate-950/80 px-3 py-2 text-sm text-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
                           value={participant.type}
                           onChange={(event) => updateParticipant(index, "type", event.target.value)}
                         >
@@ -376,6 +388,7 @@ export function SimulationWorkbench() {
                       </td>
                       <td className="px-4 py-3">
                         <Input
+                          className="min-w-[88px] bg-slate-950/80 text-slate-50 tabular-nums"
                           type="number"
                           value={participant.price}
                           onChange={(event) => updateParticipant(index, "price", event.target.value)}
@@ -383,6 +396,7 @@ export function SimulationWorkbench() {
                       </td>
                       <td className="px-4 py-3">
                         <Input
+                          className="min-w-[88px] bg-slate-950/80 text-slate-50 tabular-nums"
                           type="number"
                           value={participant.marginalCost}
                           onChange={(event) => updateParticipant(index, "marginalCost", event.target.value)}
@@ -390,6 +404,7 @@ export function SimulationWorkbench() {
                       </td>
                       <td className="px-4 py-3">
                         <Input
+                          className="min-w-[88px] bg-slate-950/80 text-slate-50 tabular-nums"
                           type="number"
                           value={participant.declaredQuantity}
                           onChange={(event) => updateParticipant(index, "declaredQuantity", event.target.value)}
@@ -397,6 +412,7 @@ export function SimulationWorkbench() {
                       </td>
                       <td className="px-4 py-3">
                         <Input
+                          className="min-w-[88px] bg-slate-950/80 text-slate-50 tabular-nums"
                           type="number"
                           value={participant.contractQuantity ?? 0}
                           onChange={(event) => updateParticipant(index, "contractQuantity", event.target.value)}
@@ -404,6 +420,7 @@ export function SimulationWorkbench() {
                       </td>
                       <td className="px-4 py-3">
                         <Input
+                          className="min-w-[88px] bg-slate-950/80 text-slate-50 tabular-nums"
                           type="number"
                           value={participant.contractPrice ?? 0}
                           onChange={(event) => updateParticipant(index, "contractPrice", event.target.value)}
@@ -411,6 +428,7 @@ export function SimulationWorkbench() {
                       </td>
                       <td className="px-4 py-3">
                         <Input
+                          className="min-w-[88px] bg-slate-950/80 text-slate-50 tabular-nums"
                           type="number"
                           value={participant.actualQuantity ?? participant.declaredQuantity}
                           onChange={(event) => updateParticipant(index, "actualQuantity", event.target.value)}
@@ -418,6 +436,7 @@ export function SimulationWorkbench() {
                       </td>
                       <td className="px-4 py-3">
                         <Button
+                          className="whitespace-nowrap"
                           type="button"
                           size="sm"
                           variant="outline"
