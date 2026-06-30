@@ -137,8 +137,7 @@ export function normalizeSimulationInput(
   const sourceParticipants = Array.isArray(input?.participants) && input.participants.length > 0
     ? input.participants
     : baseParticipants;
-  const maxLength = Math.max(sourceParticipants.length, baseParticipants.length);
-  const participants = Array.from({ length: maxLength }, (_, index) =>
+  const participants = Array.from({ length: sourceParticipants.length }, (_, index) =>
     normalizeParticipant(
       sourceParticipants[index] as Partial<MarketParticipant> | undefined,
       baseParticipants[index] ?? baseParticipants[baseParticipants.length - 1],
