@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Plus, Trash2 } from "lucide-react";
 
 import { scenarioPresets } from "@/data/scenario-presets";
 import { AwardChart, BidCurveChart, ProfitChart } from "@/components/charts/chart-shell";
 import { runMarketClearing } from "@/lib/market-clearing";
+import { createEmptyClearingResult, normalizeClearingResult, normalizeRuleConfig, normalizeSimulationInput } from "@/lib/runtime-guards";
 import { defaultRuleConfig, STORAGE_KEYS } from "@/lib/rule-config";
 import { readStorage, writeStorage } from "@/lib/storage-utils";
 import type {
@@ -21,17 +23,93 @@ import { Input } from "@/components/ui/input";
 
 const defaultScenario = scenarioPresets[0].input;
 const participantTypes: ParticipantType[] = ["火电", "新能源", "储能"];
+const loadProfile = [0.88, 0.82, 0.95, 1.04, 1.12, 1.05];
+
+function createTimePeriods(loadDemand: number, count = loadProfile.length) {
+  const profile = Array.from({ length: count }, (_, index) => loadProfile[index % loadProfile.length]);
+  const average = profile.reduce((sum, value) => sum + value, 0) / profile.length;
+
+  return profile.map((value, index) => ({
+    id: `T${index + 1}`,
+    label: `T${index + 1}`,
+    loadDemand: Math.round(((loadDemand * value) / average) * 100) / 100,
+    priceHint: 0
+  }));
+}
+
+function withEditablePeriods(input: SimulationInput): SimulationInput {
+  return {
+    ...input,
+    timePeriods: input.timePeriods?.length ? input.timePeriods : createTimePeriods(input.loadDemand)
+  };
+}
+
+function createParticipant(index: number): MarketParticipant {
+  return {
+    id: `participant-${Date.now()}-${index}`,
+    name: `新增主体 ${index}`,
+    type: "火电",
+    price: 300,
+    marginalCost: 220,
+    declaredQuantity: 100,
+    contractQuantity: 0,
+    contractPrice: 0,
+    actualQuantity: 100,
+    availableOutput: 100,
+    forecastOutput: 100,
+    availableCapacity: 100,
+    capacityAvailabilityRate: 1
+  };
+}
+
+function formatError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export function SimulationWorkbench() {
-  const [form, setForm] = useState<SimulationInput>(defaultScenario);
-  const [ruleConfig, setRuleConfig] = useState<RuleConfig>(defaultRuleConfig);
-  const [result, setResult] = useState<ClearingResult>(() =>
-    runMarketClearing(defaultScenario, defaultRuleConfig)
+  const [form, setForm] = useState<SimulationInput>(() =>
+    withEditablePeriods(normalizeSimulationInput(defaultScenario, defaultScenario))
   );
+  const [ruleConfig, setRuleConfig] = useState<RuleConfig>(() => normalizeRuleConfig(defaultRuleConfig));
+  const [result, setResult] = useState<ClearingResult>(() =>
+    normalizeClearingResult(
+      runMarketClearing(defaultScenario, defaultRuleConfig),
+      defaultScenario,
+      defaultRuleConfig
+    )
+  );
+  const [isRunning, setIsRunning] = useState(false);
+  const [feedback, setFeedback] = useState("准备运行仿真");
 
   useEffect(() => {
-    setForm(readStorage<SimulationInput>(STORAGE_KEYS.marketInput, defaultScenario));
-    setRuleConfig(readStorage<RuleConfig>(STORAGE_KEYS.ruleConfig, defaultRuleConfig));
+    const storedInput = normalizeSimulationInput(
+      readStorage<SimulationInput>(STORAGE_KEYS.marketInput, defaultScenario),
+      defaultScenario
+    );
+    const storedRuleConfig = normalizeRuleConfig(
+      readStorage<RuleConfig>(STORAGE_KEYS.ruleConfig, defaultRuleConfig)
+    );
+
+    const editableInput = withEditablePeriods(storedInput);
+    setForm(editableInput);
+    setRuleConfig(storedRuleConfig);
+
+    try {
+      setResult(
+        normalizeClearingResult(
+          runMarketClearing(editableInput, storedRuleConfig),
+          editableInput,
+          storedRuleConfig
+        )
+      );
+    } catch (error) {
+      console.error("[simulation] failed to restore saved run", error, {
+        input: storedInput,
+        ruleConfig: storedRuleConfig
+      });
+      setResult(createEmptyClearingResult(storedRuleConfig, storedInput.participants));
+      setFeedback(`恢复历史仿真失败：${formatError(error)}`);
+    }
   }, []);
 
   useEffect(() => {
@@ -39,9 +117,73 @@ export function SimulationWorkbench() {
   }, [result]);
 
   const updateLoadDemand = (value: string) => {
+    const loadDemand = value === "" ? 0 : Number(value);
     setForm((current) => ({
       ...current,
-      loadDemand: Number(value)
+      loadDemand,
+      timePeriods:
+        current.timePeriods?.length === 1
+          ? [{ ...current.timePeriods[0], loadDemand }]
+          : current.timePeriods
+    }));
+  };
+
+  const setSimulationMode = (mode: "single" | "multi") => {
+    setForm((current) => ({
+      ...current,
+      timePeriods:
+        mode === "single"
+          ? [{ id: "T1", label: "T1", loadDemand: current.loadDemand, priceHint: 0 }]
+          : createTimePeriods(current.loadDemand)
+    }));
+    setFeedback(mode === "single" ? "已切换为单一时段" : "已切换为多时段");
+  };
+
+  const addParticipant = () => {
+    setForm((current) => ({
+      ...current,
+      participants: [...current.participants, createParticipant(current.participants.length + 1)]
+    }));
+    setFeedback("已新增一个市场主体");
+  };
+
+  const removeParticipant = (participantId: string) => {
+    setForm((current) => ({
+      ...current,
+      participants: current.participants.filter((participant) => participant.id !== participantId)
+    }));
+    setFeedback("已删除市场主体，点击运行仿真后更新结果");
+  };
+
+  const updateTimePeriod = (periodId: string, field: "label" | "loadDemand", value: string) => {
+    setForm((current) => ({
+      ...current,
+      timePeriods: current.timePeriods?.map((period) =>
+        period.id === periodId
+          ? { ...period, [field]: field === "label" ? value : value === "" ? 0 : Number(value) }
+          : period
+      )
+    }));
+  };
+
+  const addTimePeriod = () => {
+    setForm((current) => {
+      const periods = current.timePeriods ?? [];
+      const index = periods.length + 1;
+      return {
+        ...current,
+        timePeriods: [
+          ...periods,
+          { id: `T${Date.now()}`, label: `T${index}`, loadDemand: current.loadDemand, priceHint: 0 }
+        ]
+      };
+    });
+  };
+
+  const removeTimePeriod = (periodId: string) => {
+    setForm((current) => ({
+      ...current,
+      timePeriods: current.timePeriods?.filter((period) => period.id !== periodId)
     }));
   };
 
@@ -62,28 +204,82 @@ export function SimulationWorkbench() {
               [field]:
                 field === "name" || field === "type"
                   ? value
-                  : Number(value)
+                  : value === ""
+                    ? 0
+                    : Number(value)
             }
           : participant
       )
     }));
   };
 
-  const handleRun = () => {
-    writeStorage(STORAGE_KEYS.marketInput, form);
-    writeStorage(STORAGE_KEYS.ruleConfig, ruleConfig);
-    setResult(runMarketClearing(form, ruleConfig));
+  const handleRun = async () => {
+    const normalizedInput = normalizeSimulationInput(form, defaultScenario);
+    const normalizedRuleConfig = normalizeRuleConfig(ruleConfig);
+
+    setIsRunning(true);
+    setFeedback("仿真运行中...");
+    writeStorage(STORAGE_KEYS.marketInput, normalizedInput);
+    writeStorage(STORAGE_KEYS.ruleConfig, normalizedRuleConfig);
+    console.info("[simulation] run requested", {
+      input: normalizedInput,
+      ruleConfig: normalizedRuleConfig
+    });
+
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
+    await new Promise<void>((resolve) => {
+      window.setTimeout(() => resolve(), 180);
+    });
+
+    try {
+      const nextResult = normalizeClearingResult(
+        runMarketClearing(normalizedInput, normalizedRuleConfig),
+        normalizedInput,
+        normalizedRuleConfig
+      );
+      console.info("[simulation] run result", nextResult);
+      setForm(normalizedInput);
+      setRuleConfig(normalizedRuleConfig);
+      setResult(nextResult);
+      setFeedback(
+        `仿真完成：出清电价 ${nextResult.clearingPrice} 元/MWh，成交电量 ${nextResult.totalClearedQuantity} MWh`
+      );
+    } catch (error) {
+      console.error("[simulation] run failed", error, {
+        input: normalizedInput,
+        ruleConfig: normalizedRuleConfig
+      });
+      setResult(createEmptyClearingResult(normalizedRuleConfig, normalizedInput.participants));
+      setFeedback(`仿真失败：${formatError(error)}`);
+    } finally {
+      setIsRunning(false);
+    }
   };
 
   const loadScenario = (index: number) => {
-    const selected = scenarioPresets[index].input;
+    const selected = withEditablePeriods(normalizeSimulationInput(scenarioPresets[index].input, defaultScenario));
     setForm(selected);
-    setResult(runMarketClearing(selected, ruleConfig));
+    setFeedback(`已载入场景：${scenarioPresets[index].scenario}`);
+    try {
+      setResult(
+        normalizeClearingResult(runMarketClearing(selected, ruleConfig), selected, ruleConfig)
+      );
+    } catch (error) {
+      console.error("[simulation] scenario load failed", error, {
+        scenario: scenarioPresets[index].scenario,
+        input: selected,
+        ruleConfig
+      });
+      setResult(createEmptyClearingResult(ruleConfig, selected.participants));
+      setFeedback(`场景加载失败：${formatError(error)}`);
+    }
   };
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-      <Card>
+    <div className="grid min-w-0 gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+      <Card className="min-w-0">
         <CardHeader>
           <CardTitle>市场仿真输入</CardTitle>
           <CardDescription>保持现有页面结构，仿真时会自动应用当前规则配置。</CardDescription>
@@ -107,15 +303,53 @@ export function SimulationWorkbench() {
             <span>容量补偿 {ruleConfig.enableCapacityPayment ? "开启" : "关闭"}</span>
           </div>
 
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-sm text-slate-300">仿真时段</span>
+            <Button
+              type="button"
+              size="sm"
+              variant={form.timePeriods?.length === 1 ? "default" : "outline"}
+              onClick={() => setSimulationMode("single")}
+            >
+              单一时段
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={form.timePeriods?.length !== 1 ? "default" : "outline"}
+              onClick={() => setSimulationMode("multi")}
+            >
+              多时段
+            </Button>
+            <Badge variant="secondary">当前 {form.timePeriods?.length ?? 0} 个时段</Badge>
+          </div>
+
           <NumberField label="负荷需求 (MWh)" value={form.loadDemand} onChange={updateLoadDemand} />
 
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="text-base font-semibold">可编辑输入表格</h3>
-              <Badge variant="secondary">规则研究沙盒输入</Badge>
+              <div className="flex items-center gap-2">
+                <Badge variant="secondary">规则研究沙盒输入</Badge>
+                <Button type="button" size="sm" variant="outline" onClick={addParticipant}>
+                  <Plus data-icon="inline-start" />
+                  新增主体
+                </Button>
+              </div>
             </div>
             <div className="overflow-x-auto rounded-2xl border border-white/10 bg-slate-950/40">
-              <table className="min-w-full text-sm">
+              <table className="min-w-[1180px] table-fixed text-sm">
+                <colgroup>
+                  <col className="w-[160px]" />
+                  <col className="w-[120px]" />
+                  <col className="w-[110px]" />
+                  <col className="w-[120px]" />
+                  <col className="w-[120px]" />
+                  <col className="w-[120px]" />
+                  <col className="w-[120px]" />
+                  <col className="w-[130px]" />
+                  <col className="w-[120px]" />
+                </colgroup>
                 <thead className="bg-white/5 text-left text-slate-300">
                   <tr>
                     <th className="px-4 py-3 font-medium">主体名称</th>
@@ -126,6 +360,7 @@ export function SimulationWorkbench() {
                     <th className="px-4 py-3 font-medium">合约电量</th>
                     <th className="px-4 py-3 font-medium">合约价格</th>
                     <th className="px-4 py-3 font-medium">实际执行电量</th>
+                    <th className="px-4 py-3 font-medium">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -133,13 +368,14 @@ export function SimulationWorkbench() {
                     <tr key={participant.id} className="border-t border-white/10">
                       <td className="px-4 py-3">
                         <Input
+                          className="min-w-[128px] bg-slate-950/80 text-slate-50"
                           value={participant.name}
                           onChange={(event) => updateParticipant(index, "name", event.target.value)}
                         />
                       </td>
                       <td className="px-4 py-3">
                         <select
-                          className="flex h-10 w-full rounded-md border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                          className="flex h-10 min-w-[88px] w-full rounded-md border border-white/10 bg-slate-950/80 px-3 py-2 text-sm text-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
                           value={participant.type}
                           onChange={(event) => updateParticipant(index, "type", event.target.value)}
                         >
@@ -152,6 +388,7 @@ export function SimulationWorkbench() {
                       </td>
                       <td className="px-4 py-3">
                         <Input
+                          className="min-w-[88px] bg-slate-950/80 text-slate-50 tabular-nums"
                           type="number"
                           value={participant.price}
                           onChange={(event) => updateParticipant(index, "price", event.target.value)}
@@ -159,6 +396,7 @@ export function SimulationWorkbench() {
                       </td>
                       <td className="px-4 py-3">
                         <Input
+                          className="min-w-[88px] bg-slate-950/80 text-slate-50 tabular-nums"
                           type="number"
                           value={participant.marginalCost}
                           onChange={(event) => updateParticipant(index, "marginalCost", event.target.value)}
@@ -166,6 +404,7 @@ export function SimulationWorkbench() {
                       </td>
                       <td className="px-4 py-3">
                         <Input
+                          className="min-w-[88px] bg-slate-950/80 text-slate-50 tabular-nums"
                           type="number"
                           value={participant.declaredQuantity}
                           onChange={(event) => updateParticipant(index, "declaredQuantity", event.target.value)}
@@ -173,6 +412,7 @@ export function SimulationWorkbench() {
                       </td>
                       <td className="px-4 py-3">
                         <Input
+                          className="min-w-[88px] bg-slate-950/80 text-slate-50 tabular-nums"
                           type="number"
                           value={participant.contractQuantity ?? 0}
                           onChange={(event) => updateParticipant(index, "contractQuantity", event.target.value)}
@@ -180,6 +420,7 @@ export function SimulationWorkbench() {
                       </td>
                       <td className="px-4 py-3">
                         <Input
+                          className="min-w-[88px] bg-slate-950/80 text-slate-50 tabular-nums"
                           type="number"
                           value={participant.contractPrice ?? 0}
                           onChange={(event) => updateParticipant(index, "contractPrice", event.target.value)}
@@ -187,10 +428,25 @@ export function SimulationWorkbench() {
                       </td>
                       <td className="px-4 py-3">
                         <Input
+                          className="min-w-[88px] bg-slate-950/80 text-slate-50 tabular-nums"
                           type="number"
                           value={participant.actualQuantity ?? participant.declaredQuantity}
                           onChange={(event) => updateParticipant(index, "actualQuantity", event.target.value)}
                         />
+                      </td>
+                      <td className="px-4 py-3">
+                        <Button
+                          className="whitespace-nowrap"
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={form.participants.length <= 1}
+                          aria-label={`删除${participant.name}`}
+                          onClick={() => removeParticipant(participant.id)}
+                        >
+                          <Trash2 data-icon="inline-start" />
+                          删除
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -199,9 +455,73 @@ export function SimulationWorkbench() {
             </div>
           </div>
 
-          <Button size="lg" onClick={handleRun}>
-            运行仿真
-          </Button>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold">时段负荷表</h3>
+                <p className="text-sm text-slate-400">单一时段保留一行；多时段可新增、删除并分别设置负荷。</p>
+              </div>
+              {form.timePeriods?.length !== 1 ? (
+                <Button type="button" size="sm" variant="outline" onClick={addTimePeriod}>
+                  <Plus data-icon="inline-start" />
+                  新增时段
+                </Button>
+              ) : null}
+            </div>
+            <div className="overflow-x-auto rounded-2xl border border-white/10 bg-slate-950/40">
+              <table className="min-w-full text-sm">
+                <thead className="bg-white/5 text-left text-slate-300">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">时段名称</th>
+                    <th className="px-4 py-3 font-medium">负荷需求 (MWh)</th>
+                    <th className="px-4 py-3 font-medium">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {form.timePeriods?.map((period) => (
+                    <tr key={period.id} className="border-t border-white/10">
+                      <td className="px-4 py-3">
+                        <Input
+                          value={period.label}
+                          aria-label={`${period.label}时段名称`}
+                          onChange={(event) => updateTimePeriod(period.id, "label", event.target.value)}
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <Input
+                          type="number"
+                          min="0"
+                          value={period.loadDemand}
+                          aria-label={`${period.label}负荷需求`}
+                          onChange={(event) => updateTimePeriod(period.id, "loadDemand", event.target.value)}
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={(form.timePeriods?.length ?? 0) <= 2}
+                          aria-label={`删除${period.label}`}
+                          onClick={() => removeTimePeriod(period.id)}
+                        >
+                          <Trash2 data-icon="inline-start" />
+                          删除
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <Button size="lg" onClick={() => void handleRun()} disabled={isRunning}>
+              {isRunning ? "运行中..." : "运行仿真"}
+            </Button>
+            <span className="text-sm text-cyan-200">{feedback}</span>
+          </div>
         </CardContent>
       </Card>
 
@@ -287,8 +607,8 @@ export function SimulationWorkbench() {
 
         <Card>
           <CardHeader>
-            <CardTitle>多时段出清结果</CardTitle>
-            <CardDescription>展示时段电价、基础负荷、储能充电负荷和未满足需求。</CardDescription>
+            <CardTitle>时段出清结果</CardTitle>
+            <CardDescription>展示单一或多时段电价、基础负荷、储能充电负荷和未满足需求。</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto rounded-2xl border border-white/10 bg-slate-950/40">

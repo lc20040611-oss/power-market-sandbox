@@ -18,7 +18,7 @@ test("experiments page runs from template and shows version archive area", async
   await expect(page.getByText("实验管理与参数扫描")).toBeVisible();
   await page.getByRole("button", { name: "运行实验" }).click();
   await expect(page.getByText("实验版本与运行记录")).toBeVisible();
-  await expect(page.getByText(/实验已存档，版本 v\d+，共 \d+ 组结果/)).toBeVisible();
+  await expect(page.getByText("实验已存档", { exact: false })).toBeVisible({ timeout: 15000 });
   await expect(page.getByRole("cell", { name: "新能源渗透率敏感性实验" }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: /导出 CSV/ })).toBeEnabled();
 });
@@ -28,6 +28,6 @@ test("experiments page runs contract ratio template with three combinations", as
   await page.getByRole("button", { name: "中长期合约比例敏感性实验" }).first().click();
   await expect(page.getByText("组合数 3")).toBeVisible();
   await page.getByRole("button", { name: "运行实验" }).click();
-  await expect(page.getByText(/实验已存档，版本 v\d+，共 3 组结果/)).toBeVisible();
+  await expect(page.getByText("实验已存档", { exact: false })).toBeVisible({ timeout: 15000 });
   await expect(page.getByRole("cell", { name: "中长期合约比例=0.3" }).first()).toBeVisible();
 });

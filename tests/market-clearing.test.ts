@@ -22,6 +22,7 @@ import {
 import { generateResearchReportDraft } from "../src/lib/paper-tools";
 import { computeRenewableMetrics } from "../src/lib/renewables";
 import { defaultRuleConfig } from "../src/lib/rule-config";
+import { normalizeSimulationInput } from "../src/lib/runtime-guards";
 import { optimizeStorageDispatch } from "../src/lib/storage-optimizer";
 import { simulateStorageOperation } from "../src/lib/storage";
 import type { RuleConfig, SimulationInput, StorageAsset } from "../src/lib/types";
@@ -48,6 +49,23 @@ function withRuleConfig(partial: Partial<RuleConfig>): RuleConfig {
     ...partial
   };
 }
+
+test("归一化后保留用户新增或删除的主体行", () => {
+  const fallback: SimulationInput = {
+    loadDemand: 100,
+    participants: [
+      { id: "g1", name: "火电 1", type: "火电", price: 100, marginalCost: 70, declaredQuantity: 80 },
+      { id: "g2", name: "火电 2", type: "火电", price: 150, marginalCost: 100, declaredQuantity: 100 }
+    ]
+  };
+  const normalized = normalizeSimulationInput(
+    { ...fallback, participants: [fallback.participants[0]] },
+    fallback
+  );
+
+  assert.equal(normalized.participants.length, 1);
+  assert.equal(normalized.participants[0].id, "g1");
+});
 
 test("统一出清价和按报价支付的收入计算不同", () => {
   const uniformResult = runMarketClearing(input, withRuleConfig({ clearingMechanism: "uniformPrice" }));

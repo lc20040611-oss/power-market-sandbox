@@ -22,6 +22,7 @@ import {
 } from "@/lib/experiment-runner";
 import { exportExperimentResultsCsv, exportExperimentResultsJson } from "@/lib/export-utils";
 import { countParameterCombinations, getDefaultSweepConfigs } from "@/lib/parameter-sweep";
+import { normalizeSimulationInput } from "@/lib/runtime-guards";
 import { STORAGE_KEYS } from "@/lib/rule-config";
 import { estimateStorageUsage, readStorage, writeStorage } from "@/lib/storage-utils";
 import type {
@@ -51,6 +52,10 @@ async function requestJson<T>(url: string, init?: RequestInit) {
   }
 
   return (await response.json()) as T;
+}
+
+function formatError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function buildDraftConfig(template: (typeof experimentTemplates)[number]) {
@@ -136,13 +141,20 @@ export function ExperimentsPanel() {
 
   const handleRunExperiment = async () => {
     setIsSubmitting(true);
+    setFeedback("实验运行中...");
     try {
-      const baseInput =
+      const baseInput = normalizeSimulationInput(
         demoScenarios.find((scenario) => scenario.scenario === config.baseScenario)?.input ??
-        demoScenarios[0].input;
+          demoScenarios[0].input,
+        demoScenarios[0].input
+      );
       const runConfig = config.id.endsWith("-draft")
         ? { ...config, id: `${config.id.slice(0, -"-draft".length)}-${Date.now()}` }
         : config;
+      console.info("[experiments] run requested", {
+        config: runConfig,
+        baseInput
+      });
 
       const saveResult = await requestJson<{ version: number; updatedAt: string }>("/api/experiments", {
         method: "POST",
@@ -151,6 +163,12 @@ export function ExperimentsPanel() {
 
       const record = runExperiment(runConfig, baseInput);
       record.sourceVersion = saveResult.version;
+      console.info("[experiments] run result", {
+        experimentId: record.experimentId,
+        resultCount: record.results.length,
+        chartPoints: record.chartData.length,
+        runAt: record.runAt
+      });
 
       const runResponse = await requestJson<{ record: ExperimentRunRecord }>(
         `/api/experiments/${runConfig.id}/runs`,
@@ -170,7 +188,8 @@ export function ExperimentsPanel() {
       await loadCatalog(runConfig.id);
       setFeedback(`实验已存档，版本 v${saveResult.version}，共 ${record.results.length} 组结果`);
     } catch (error) {
-      setFeedback(`实验运行失败：${String(error)}`);
+      console.error("[experiments] run failed", error, { config });
+      setFeedback(`实验运行失败：${formatError(error)}`);
     } finally {
       setIsSubmitting(false);
     }
